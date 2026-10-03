@@ -1,0 +1,57 @@
+{
+  "schema": "part-spec.v1",
+  "part": "bracket",
+  "units": "mm",
+  "material": "Д16Т ГОСТ 4784-2019",
+  "mass_kg": 0.17,
+  "drawing": {
+    "title": "Кронштейн угловой (Angle bracket)",
+    "number": "DEMO-003",
+    "scale": "1:1",
+    "projection": "first angle (ESKD / ISO E)",
+    "views": {
+      "top view (вид сверху)": "global X right, Y up; base plate 80x50, csk holes, slot, hidden pocket",
+      "front view (главный вид), looking along +Y": "global X right, Z up; upright 60 high, holes Ø9, spigot Ø20 with Ø10 bore",
+      "left view (вид слева)": "global Y, Z; plate 8 thick, upright 8 thick, inner bend R4, spigot 4 proud"
+    }
+  },
+  "base": {
+    "type": "extrude",
+    "profile": {"shape": "rect", "width": 80, "length": 50},
+    "height": 8
+  },
+  "features": [
+    {"id": "P1", "type": "pocket", "face": "<Z", "at": [0, 6],
+     "profile": {"shape": "rect", "width": 40, "length": 30, "corner_radius": 3}, "depth": 2},
+    {"id": "S1", "type": "slot", "face": ">Z", "at": [0, 12], "length": 24, "width": 9,
+     "angle_deg": 0, "depth": "through"},
+    {"id": "H1", "type": "hole", "face": ">Z", "diameter": 6.6, "depth": "through",
+     "positions": [[-28, 12], [28, 12]], "csk": {"diameter": 13, "angle_deg": 90}},
+    {"id": "B1", "type": "boss", "face": ">Z", "at": [0, -21],
+     "profile": {"shape": "rect", "width": 80, "length": 8}, "height": 52},
+    {"id": "H2", "type": "hole", "face": "<Y", "diameter": 9, "depth": "through",
+     "positions": [[-28, 40], [28, 40]]},
+    {"id": "B2", "type": "boss", "face": "<Y", "at": [0, 40],
+     "profile": {"shape": "circle", "diameter": 20}, "height": 4},
+    {"id": "H3", "type": "hole", "face": "<Y", "diameter": 10, "depth": "through",
+     "positions": [[0, 40]]},
+    {"id": "F1", "type": "fillet", "radius": 6, "edges": "|Z and >Y"},
+    {"id": "F2", "type": "fillet", "radius": 4, "edges": {"near": [0, -17, 8]}}
+  ],
+  "expect": {"bbox_mm": [80, 54, 60], "tolerance_mm": 0.05},
+  "assumptions": [
+    {"id": "A1", "what": "Origin", "value": "centre of the base plate in plan, z=0 on the underside, upright at the -Y edge",
+     "source": "symmetric dimensioning about the vertical centre line in the front and top views"},
+    {"id": "A2", "what": "Upright modelled as a boss on the plate top face", "value": "80 x 8 at y=-21, 52 high (overall height 60)",
+     "source": "overall height 60 and plate thickness 8 in the left view; one solid, machined from plate"},
+    {"id": "A3", "what": "Countersink for M6 flat-head screws", "value": "Ø6.6 through, csk Ø13 x 90°",
+     "source": "callout '2 отв. Ø6,6, зенковка Ø13x90°' in the top view"},
+    {"id": "A4", "what": "Inner bend fillet", "value": "R4",
+     "source": "callout 'R4' in the left view"},
+    {"id": "A5", "what": "Front plan corners", "value": "R6",
+     "source": "callout '2 скругл. R6' in the top view"},
+    {"id": "A6", "what": "Title-block mass", "value": "0.17 kg",
+     "source": "основная надпись; checked against volume x 2.78 g/cm³"}
+  ],
+  "open_questions": []
+}
