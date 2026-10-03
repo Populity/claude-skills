@@ -813,6 +813,7 @@ When I correct you, or you catch yourself making a mistake: before continuing ad
 ## Lessons
 
 - (Claude adds rules here)
+- When the user asks to work as a team / office (agents, sub-agents, managers, directors), load `.claude/skills/office-team/SKILL.md` and staff exactly: 2 directors (main session, two departments) → 2 checking managers (run after the leads) → 5 leads × 3 sub-agents, each on a different packet with owned files.
 
 ## Additional Resources
 
