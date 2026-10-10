@@ -21,7 +21,9 @@ import argparse
 import base64
 import html
 import json
+import math
 import os
+import re
 import struct
 import sys
 
@@ -30,22 +32,29 @@ def read_stl(data):
     """Return a flat list of float vertex coordinates (9 per triangle)."""
     if len(data) >= 84:
         n = struct.unpack_from("<I", data, 80)[0]
-        if 84 + n * 50 == len(data):
+        # exact size, or a few trailing pad bytes some exporters add (header not "solid ...")
+        if n and (84 + n * 50 == len(data) or (0 < len(data) - (84 + n * 50) < 50 and not data[:5] == b"solid")):
             out = []
             for i in range(n):
                 off = 84 + i * 50 + 12  # skip the facet normal
                 out.extend(struct.unpack_from("<9f", data, off))
+            if not all(math.isfinite(v) for v in out):
+                raise ValueError("binary STL contains NaN/infinite coordinates")
             return out
+        if n == 0 and len(data) == 84:
+            raise ValueError("binary STL with zero triangles")
     text = data.decode("utf-8", errors="ignore")
     if "facet" not in text:
         raise ValueError("not an STL (neither binary nor ASCII)")
     out = []
     for line in text.splitlines():
         parts = line.split()
-        if len(parts) == 4 and parts[0] == "vertex":
+        if len(parts) == 4 and parts[0].lower() == "vertex":
             out.extend(float(v) for v in parts[1:])
     if not out or len(out) % 9:
         raise ValueError("ASCII STL has no complete triangles")
+    if not all(math.isfinite(v) for v in out):
+        raise ValueError("ASCII STL contains NaN/infinite coordinates")
     return out
 
 
@@ -141,9 +150,12 @@ place();
 
 def build_page(coords, title, meta):
     raw = struct.pack(f"<{len(coords)}f", *coords)
-    return (PAGE.replace("__TITLE__", html.escape(title))
-                .replace("__META__", json.dumps(meta))
-                .replace("__DATA__", base64.b64encode(raw).decode("ascii")))
+    # '<' escaped so no string in META can close the <script> element
+    meta_js = json.dumps(meta, ensure_ascii=True).replace("<", "\\u003c").replace(">", "\\u003e")
+    subs = {"__TITLE__": html.escape(title), "__META__": meta_js,
+            "__DATA__": base64.b64encode(raw).decode("ascii")}
+    # one pass, so a title containing "__DATA__" is not itself substituted
+    return re.sub(r"__(TITLE|META|DATA)__", lambda m: subs[m.group(0)], PAGE)
 
 
 def sample_coords():
@@ -175,7 +187,10 @@ def main(argv=None):
         try:
             with open(a.stl, "rb") as fh:
                 coords = read_stl(fh.read())
-        except (OSError, ValueError) as e:
+        except IsADirectoryError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 64
+        except (OSError, ValueError, struct.error) as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
         title = a.title or os.path.splitext(os.path.basename(a.stl))[0]
@@ -187,13 +202,21 @@ def main(argv=None):
         try:
             with open(a.report, encoding="utf-8") as fh:
                 rep = json.load(fh)
-            meta["volume_mm3"] = rep.get("volume_mm3")
-        except (OSError, json.JSONDecodeError):
-            pass
+            vol = rep.get("volume_mm3") if isinstance(rep, dict) else None
+            if isinstance(vol, (int, float)) and not isinstance(vol, bool) and math.isfinite(vol):
+                meta["volume_mm3"] = vol
+            else:
+                print("warning: report has no numeric volume_mm3; volume not shown", file=sys.stderr)
+        except (OSError, ValueError, RecursionError) as e:
+            print(f"warning: report not read ({e}); volume not shown", file=sys.stderr)
 
     page = build_page(coords, title, meta)
-    with open(out, "w", encoding="utf-8") as fh:
-        fh.write(page)
+    try:
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(page)
+    except OSError as e:
+        print(f"error: cannot write {out}: {e}", file=sys.stderr)
+        return 64
     tris = len(coords) // 9
     if a.output == "json":
         print(json.dumps({"written": out, "triangles": tris, "bytes": len(page)}))
@@ -203,4 +226,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:  # output piped into head/less that closed early
+        sys.stderr.close()
+        sys.exit(0)

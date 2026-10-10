@@ -6,9 +6,13 @@ LibreCAD can all save DXF), nothing should be read off pixels. This tool parses
 the ENTITIES section with the standard library and reports:
 
   * drawing units ($INSUNITS) and extents;
-  * circles grouped by diameter with every centre — the hole table, exact;
+  * circles grouped by diameter with every centre, layer and linetype — the
+    hole table, exact. Circles on centre-line layers (CENTER, AXIS, ОСЕВ...) or
+    drawn dash-dot (a bolt-circle / PCD) are listed apart as construction circles;
   * arc radii (fillets, slot ends, rounded corners);
   * every DIMENSION's measured value and text override (Ø, R, M, tolerances);
+    when the file stores no measurement (group 42) it is computed from the
+    definition points, and Ø / R are prefixed from the dimension type;
   * TEXT/MTEXT notes (general notes, title block: material, mass, scale);
   * per-layer entity counts (separates outline, centre lines, hatching).
 
@@ -23,6 +27,7 @@ Exit codes: 0 extracted · 2 not an ASCII DXF / no ENTITIES · 64 usage.
 
 import argparse
 import json
+import math
 import re
 import sys
 from collections import Counter, defaultdict
@@ -152,35 +157,94 @@ EOF
 """
 
 
+CENTRE_LAYER_RE = re.compile(r"^(center|centre|axis|axes|cl|осев|ось|оси)", re.IGNORECASE)
+CENTRE_LTYPE_RE = re.compile(r"center|centre|dashdot|dash_dot|осев|штрихпунктир", re.IGNORECASE)
+
+
 def pairs(text):
     lines = text.splitlines()
     for i in range(0, len(lines) - 1, 2):
         yield lines[i].strip(), lines[i + 1].rstrip("\r")
 
 
-def decode_text(s):
-    """DXF control codes -> readable symbols (%%c = Ø, %%d = °, %%p = ±)."""
+# MTEXT codes that take an argument up to ';' and codes that stand alone.
+_MTEXT_ARG = set("ACcFfHQTWp")
+_MTEXT_TOGGLE = set("LlOoKk")
+
+
+def _mtext_plain(s):
+    """Strip MTEXT inline formatting (\\P, \\L, \\H2.5x;, \\S1/2;, {...}) to plain text."""
+    out, i, n = [], 0, len(s)
+    while i < n:
+        ch = s[i]
+        if ch in "{}":
+            i += 1
+            continue
+        if ch != "\\" or i + 1 >= n:
+            out.append(ch)
+            i += 1
+            continue
+        code = s[i + 1]
+        if code in "PNX":                   # paragraph / column break
+            out.append(" ")
+            i += 2
+        elif code == "~":                   # non-breaking space
+            out.append(" ")
+            i += 2
+        elif code in "\\{}":               # escaped literal
+            out.append(code)
+            i += 2
+        elif code == "U" and re.match(r"\+[0-9A-Fa-f]{4}", s[i + 2:i + 7]):
+            out.append(chr(int(s[i + 3:i + 7], 16)))
+            i += 7
+        elif code == "M" and re.match(r"\+[0-9A-Fa-f]{5}", s[i + 2:i + 8]):
+            i += 8                          # legacy multibyte code: cannot map, drop
+        elif code == "S":                   # stacked fraction / tolerance: 1^2 1/2 1#2
+            j = s.find(";", i + 2)
+            j = n if j < 0 else j
+            out.append(re.sub(r"[\^#/]", "/", s[i + 2:j]).replace("/ ", "/").strip())
+            i = j + 1
+        elif code in _MTEXT_ARG:
+            j = s.find(";", i + 2)
+            i = n if j < 0 else j + 1
+        elif code in _MTEXT_TOGGLE:
+            i += 2
+        else:
+            out.append(code)
+            i += 2
+    return "".join(out)
+
+
+def decode_text(s, mtext=True):
+    """DXF control codes -> readable symbols (%%c = Ø, %%d = °, %%p = ±).
+
+    MTEXT (and dimension text, which is MTEXT-formatted) also has its inline
+    formatting removed; plain TEXT keeps backslashes as written.
+    """
     s = re.sub(r"%%[cC]", "Ø", s)
     s = re.sub(r"%%[dD]", "°", s)
     s = re.sub(r"%%[pP]", "±", s)
-    s = re.sub(r"\\[Pp]", " ", s)                # MTEXT paragraph break
-    s = re.sub(r"\\[A-Za-z][^;\\]*;", "", s)     # MTEXT inline formatting codes
-    s = re.sub(r"\\U\+([0-9A-Fa-f]{4})", lambda m: chr(int(m.group(1), 16)), s)
-    return s.replace("{", "").replace("}", "").strip()
+    s = re.sub(r"%%[uUoOkK]", "", s)            # underline / overline / strike toggles
+    s = re.sub(r"%%(\d{3})", lambda m: chr(int(m.group(1))), s)
+    s = s.replace("%%%", "%")
+    if mtext:
+        s = _mtext_plain(s)
+    return " ".join(s.split())
 
 
 def parse(text):
-    if "ENTITIES" not in text:
-        raise ValueError("no ENTITIES section — is this an ASCII DXF?")
-    units = "unitless"
+    """-> (units, entities, layer linetypes). Raises ValueError if there is no ENTITIES section."""
+    units, layer_ltype = "unitless", {}
     section = None
-    ents = []
+    ents, tables = [], []
     cur = None
     last_var = None
+    saw_entities = False
     for code, val in pairs(text):
         if code == "0":
+            val = val.strip()
             if cur:
-                ents.append(cur)
+                (tables if section == "TABLES" else ents).append(cur)
                 cur = None
             if val == "SECTION":
                 section = "?"
@@ -190,9 +254,12 @@ def parse(text):
                 continue
             if section == "ENTITIES":
                 cur = {"type": val, "codes": defaultdict(list)}
+            elif section == "TABLES" and val == "LAYER":
+                cur = {"type": val, "codes": defaultdict(list)}
             continue
         if section == "?" and code == "2":
-            section = val
+            section = val.strip()
+            saw_entities = saw_entities or section == "ENTITIES"
             continue
         if section == "HEADER":
             if code == "9":
@@ -206,21 +273,61 @@ def parse(text):
         if cur is not None:
             cur["codes"][code].append(val)
     if cur:
-        ents.append(cur)
-    return units, ents
+        (tables if section == "TABLES" else ents).append(cur)
+    if not saw_entities:
+        raise ValueError("no ENTITIES section — is this an ASCII DXF?")
+    for t in tables:
+        name = (t["codes"].get("2") or [""])[0].strip()
+        if name:
+            layer_ltype[name] = (t["codes"].get("6") or ["CONTINUOUS"])[0].strip()
+    return units, ents, layer_ltype
 
 
 def _f(c, code, i=0, default=None):
     try:
-        return float(c[code][i])
+        v = float(c[code][i])
     except (KeyError, IndexError, ValueError):
         return default
+    return v if math.isfinite(v) else default
+
+
+def _dim_measure(kind, c):
+    """Measurement from a DIMENSION's definition points when group 42 is absent."""
+    p = {k: (_f(c, f"1{k}"), _f(c, f"2{k}")) for k in "0345"}
+
+    def dist(a, b):
+        if None in a or None in b:
+            return None
+        return math.hypot(b[0] - a[0], b[1] - a[1])
+    if kind in ("linear", "aligned"):
+        a, b = p["3"], p["4"]
+        if None in a or None in b:
+            return None
+        if kind == "aligned":
+            return dist(a, b)
+        ang = math.radians(_f(c, "50", default=0.0))
+        return abs((b[0] - a[0]) * math.cos(ang) + (b[1] - a[1]) * math.sin(ang))
+    if kind in ("diameter", "radius"):
+        return dist(p["0"], p["5"])
+    return None
+
+
+def _arc_points(x, y, r, a0, a1):
+    """End points plus the quadrant points an arc actually passes through."""
+    a0, a1 = a0 % 360, a1 % 360
+    sweep = (a1 - a0) % 360 or 360
+    angs = [a0, a0 + sweep] + [q for q in (0, 90, 180, 270, 360, 450, 540, 630)
+                               if a0 < q < a0 + sweep]
+    return [(x + r * math.cos(math.radians(a)), y + r * math.sin(math.radians(a))) for a in angs]
 
 
 def extract(text):
-    units, ents = parse(text)
+    units, ents, layer_ltype = parse(text)
     xs, ys = [], []
     circles = defaultdict(list)
+    circle_meta = defaultdict(lambda: {"layers": set(), "linetypes": set()})
+    construction = defaultdict(list)
+    construction_meta = defaultdict(lambda: {"layers": set(), "linetypes": set()})
     arcs = Counter()
     dims, notes = [], []
     layers = Counter()
@@ -234,41 +341,69 @@ def extract(text):
     for e in ents:
         t, c = e["type"], e["codes"]
         types[t] += 1
-        layers[(c.get("8") or ["0"])[0]] += 1
+        layer = (c.get("8") or ["0"])[0].strip()
+        layers[layer] += 1
         if t == "LINE":
             pt(_f(c, "10"), _f(c, "20"))
             pt(_f(c, "11"), _f(c, "21"))
         elif t == "CIRCLE":
-            x, y, r = _f(c, "10"), _f(c, "20"), _f(c, "40")
-            if r:
-                circles[round(2 * r, 4)].append([round(x, 4), round(y, 4)])
+            x, y, r = _f(c, "10", default=0.0), _f(c, "20", default=0.0), _f(c, "40")
+            if r and r > 0:
+                lt = (c.get("6") or ["BYLAYER"])[0].strip()
+                eff = layer_ltype.get(layer, "CONTINUOUS") if lt.upper() in ("BYLAYER", "BYBLOCK") else lt
+                is_cl = bool(CENTRE_LAYER_RE.match(layer) or CENTRE_LTYPE_RE.search(eff))
+                d = round(2 * r, 4)
+                (construction if is_cl else circles)[d].append([round(x, 4), round(y, 4)])
+                meta = (construction_meta if is_cl else circle_meta)[d]
+                meta["layers"].add(layer)
+                meta["linetypes"].add(eff)
                 pt(x - r, y - r)
                 pt(x + r, y + r)
         elif t == "ARC":
-            x, y, r = _f(c, "10"), _f(c, "20"), _f(c, "40")
-            if r:
+            x, y, r = _f(c, "10", default=0.0), _f(c, "20", default=0.0), _f(c, "40")
+            if r and r > 0:
                 arcs[round(r, 4)] += 1
-                pt(x, y)
-        elif t in ("LWPOLYLINE", "POLYLINE", "VERTEX"):
+                for q in _arc_points(x, y, r, _f(c, "50", default=0.0), _f(c, "51", default=360.0)):
+                    pt(*q)
+        elif t == "POLYLINE":
+            pass  # its own 10/20 is a dummy elevation point; the VERTEX entities carry the geometry
+        elif t in ("LWPOLYLINE", "VERTEX"):
             for i in range(len(c.get("10", []))):
                 pt(_f(c, "10", i), _f(c, "20", i))
         elif t == "DIMENSION":
-            meas = _f(c, "42")
-            raw = (c.get("1") or ["<>"])[0]
-            txt = decode_text(raw)
-            shown = txt.replace("<>", f"{meas:g}" if meas is not None else "") if txt else (
-                f"{meas:g}" if meas is not None else "")
-            kind_code = int(_f(c, "70", default=0) or 0) & 0x0F
+            kind_code = int(_f(c, "70", default=0) or 0) & 0x07
             kind = {0: "linear", 1: "aligned", 2: "angular", 3: "diameter", 4: "radius",
                     5: "angular3p", 6: "ordinate"}.get(kind_code, "other")
+            meas = _f(c, "42")
+            if meas is None or meas < 0:  # R12 and some exporters store no measurement
+                meas = _dim_measure(kind, c)
+                meas = round(meas, 6) if meas is not None else None
+            prefix = {"diameter": "Ø", "radius": "R"}.get(kind, "")
+            value = f"{prefix}{meas:g}" if meas is not None else "(not stored)"
+            raw = (c.get("1") or [""])[0]
+            txt = decode_text(raw)
+            if not txt or txt == "<>":
+                shown = value
+            elif "<>" in txt:
+                before = txt.split("<>", 1)[0]
+                # do not double a prefix the override already carries (e.g. "%%c<>" -> "Ø<>")
+                v = value[len(prefix):] if prefix and before.rstrip().endswith(prefix) else value
+                shown = txt.replace("<>", v)
+            else:
+                shown = txt
             dims.append({"kind": kind, "measured": meas, "text": shown})
         elif t in ("TEXT", "MTEXT", "ATTRIB"):
             body = "".join(c.get("3", [])) + "".join(c.get("1", []))
             if body.strip():
-                notes.append(decode_text(body))
+                notes.append(decode_text(body, mtext=(t == "MTEXT")))
 
-    hole_table = [{"diameter": d, "count": len(v), "centers": v}
+    hole_table = [{"diameter": d, "count": len(v), "centers": v,
+                   "layers": sorted(circle_meta[d]["layers"]), "linetypes": sorted(circle_meta[d]["linetypes"])}
                   for d, v in sorted(circles.items())]
+    construction_circles = [{"diameter": d, "count": len(v), "centers": v,
+                             "layers": sorted(construction_meta[d]["layers"]),
+                             "linetypes": sorted(construction_meta[d]["linetypes"])}
+                            for d, v in sorted(construction.items())]
     hints = []
     for n in notes:
         low = n.lower()
@@ -285,11 +420,29 @@ def extract(text):
         "entity_counts": dict(types),
         "layers": dict(layers),
         "hole_table": hole_table,
+        "construction_circles": construction_circles,
         "arc_radii": [{"radius": r, "count": n} for r, n in sorted(arcs.items())],
         "dimensions": dims,
         "notes": notes,
         "spec_hints": hints,
     }
+
+
+def decode_bytes(raw):
+    """UTF-8 (R2007+ files, or a BOM) first; else the header's $DWGCODEPAGE (e.g.
+    ANSI_1251 for a Russian R12/R2000 file); else cp1251; latin-1 never fails."""
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    m = re.search(rb"\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*ANSI_(\d+)", raw[:20000])
+    encs = ([f"cp{m.group(1).decode()}"] if m else []) + ["cp1251", "latin-1"]
+    for enc in encs:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("latin-1")
 
 
 def main(argv=None):
@@ -316,12 +469,7 @@ def main(argv=None):
         if raw[:2] == b"AC" and raw[2:6].isdigit():
             print("error: this looks like a DWG file — export it as ASCII DXF", file=sys.stderr)
             return 2
-        for enc in ("utf-8", "cp1251", "latin-1"):
-            try:
-                text = raw.decode(enc)
-                break
-            except UnicodeDecodeError:
-                continue
+        text = decode_bytes(raw)
     else:
         ap.print_usage(sys.stderr)
         return 64
@@ -338,11 +486,17 @@ def main(argv=None):
     print(f"Units: {out['units']}")
     if out["extents"]:
         print(f"Extents: {out['extents']['size'][0]} x {out['extents']['size'][1]} (sheet, all views)")
-    print("Holes (circles by diameter):")
-    for h in out["hole_table"]:
-        cs = ", ".join(f"({x:g}, {y:g})" for x, y in h["centers"][:8])
-        more = " ..." if len(h["centers"]) > 8 else ""
-        print(f"  Ø{h['diameter']:g} x{h['count']}: {cs}{more}")
+    for title, table in (("Holes (circles by diameter):", out["hole_table"]),
+                         ("Construction circles (centre-line layer / dash-dot: PCD, not holes):",
+                          out["construction_circles"])):
+        if not table and table is out["construction_circles"]:
+            continue
+        print(title)
+        for h in table:
+            cs = ", ".join(f"({x:g}, {y:g})" for x, y in h["centers"][:8])
+            more = " ..." if len(h["centers"]) > 8 else ""
+            where = f"  [layer {', '.join(h['layers'])}; {', '.join(h['linetypes'])}]"
+            print(f"  Ø{h['diameter']:g} x{h['count']}: {cs}{more}{where}")
     if out["arc_radii"]:
         print("Arc radii: " + ", ".join(f"R{r['radius']:g} x{r['count']}" for r in out["arc_radii"]))
     print("Dimensions:")
@@ -356,4 +510,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:  # output piped into head/less that closed early
+        sys.stderr.close()
+        sys.exit(0)

@@ -21,11 +21,33 @@ Exit codes: 0 written · 2 spec invalid · 3 open questions · 64 usage.
 
 import argparse
 import json
+import math
 import os
 import sys
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from part_spec_validator import DATUMS, SAMPLE_SPEC, expand_positions, validate  # noqa: E402
+from part_spec_validator import DATUMS, SAMPLE_SPEC, expand_positions, load_json, validate  # noqa: E402
+
+
+def _one_line(text):
+    """Spec text made safe for a '#' comment or a docstring line in generated code.
+
+    Anything that could end the line (newline, CR, U+2028, NUL, other control or
+    format characters) becomes a space, so a drawing title or thread designation
+    can never start a new line of code. Docstring delimiters are defused by
+    _doc_text() below.
+    """
+    out = []
+    for ch in str(text):
+        cat = unicodedata.category(ch)
+        out.append(" " if cat[0] in "CZ" and ch != " " else ch)
+    return " ".join("".join(out).split())
+
+
+def _doc_text(text):
+    """_one_line() plus escaping for use inside a triple-quoted docstring."""
+    return _one_line(text).replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _f(v):
@@ -77,7 +99,15 @@ def profile_chain(p, at=(0, 0), face=None):
         return (f".pushPoints({loc}).slot2D({_f(p['length'])}, {_f(p['width'])}, "
                 f"{_ang(p.get('angle_deg', 0), face)})")
     if s == "regular_polygon":
-        return f".pushPoints({loc}).polygon({int(p['sides'])}, {_f(p['across_corners'])})"
+        n, rad = int(p["sides"]), float(p["across_corners"]) / 2
+        if face is None:
+            return f".pushPoints({loc}).polygon({n}, {_f(p['across_corners'])})"
+        # On a face the local axes may be mirrored (<X, >Y ...), which would mirror an
+        # odd-sided polygon. Emit the vertices in global in-face coordinates instead:
+        # first vertex on the global +u axis, as .polygon() does on the XY plane.
+        pts = [(at[0] + rad * math.cos(2 * math.pi * i / n), at[1] + rad * math.sin(2 * math.pi * i / n))
+               for i in range(n)]
+        return f".polyline({_loc(pts, face)}).close()"
     if s == "polygon":
         pts = [(q[0] + at[0], q[1] + at[1]) for q in p["points"]]
         return f".polyline({_loc(pts, face)}).close()"
@@ -176,7 +206,7 @@ def feature_lines(f):
     if t == "shell":
         return [f"r = r.faces({f['face']!r}).shell({_f(f['thickness'])})"]
     if t == "thread":
-        return [f"# Cosmetic thread {f['designation']} on {f['on']}: modelled at its drill/nominal",
+        return [f"# Cosmetic thread {_one_line(f['designation'])} on {_one_line(f['on'])}: modelled at its drill/nominal",
                 "# diameter (standard CAD practice); the callout is recorded in the report."]
     raise ValueError(t)
 
@@ -297,10 +327,18 @@ def measure(wp):
     shape = wp.val()
     solids = wp.solids().vals()
     bb = shape.BoundingBox()
-    cyl = []
+    cyl, axes = [], []
     for face in shape.Faces():
         if face.geomType() == "CYLINDER":
-            cyl.append(round(2 * BRepAdaptor_Surface(face.wrapped).Cylinder().Radius(), 4))
+            c = BRepAdaptor_Surface(face.wrapped).Cylinder()
+            d = round(2 * c.Radius(), 4)
+            cyl.append(d)
+            loc, dirn = c.Axis().Location(), c.Axis().Direction()
+            n = [dirn.X(), dirn.Y(), dirn.Z()]
+            if next(x for x in n if abs(x) > 1e-9) < 0:  # one sign per axis, for readability
+                n = [-x for x in n]
+            axes.append({{"diameter": d, "axis_point": [round(v, 5) + 0.0 for v in (loc.X(), loc.Y(), loc.Z())],
+                         "axis_dir": [round(x, 6) + 0.0 for x in n]}})  # + 0.0 drops "-0.0"
     return {{
         "part": PART,
         "valid": bool(shape.isValid()),
@@ -312,6 +350,9 @@ def measure(wp):
         "faces": len(shape.Faces()),
         "edges": len(shape.Edges()),
         "cylinder_diameters_mm": sorted(cyl),
+        # per cylindrical face: diameter + axis line, so the verifier can tell a hole
+        # at its drawn position from a fillet, rounded corner or slot end of equal size
+        "cylinders": sorted(axes, key=lambda c: (c["diameter"], c["axis_point"])),
         "threads": [f for f in SPEC.get("features", []) if f.get("type") == "thread"],
     }}
 
@@ -361,10 +402,10 @@ def generate(spec, spec_name="spec.json"):
         if all(ln.startswith("#") for ln in lines):
             lines.append("pass")
         body += [f"        {ln}" for ln in lines]
-    drawing = spec.get("drawing") or {}
+    drawing = spec.get("drawing") if isinstance(spec.get("drawing"), dict) else {}
     drawing_id = " ".join(str(drawing.get(k)) for k in ("number", "title") if drawing.get(k)) or "(unnamed)"
     return TEMPLATE.format(
-        part=spec["part"], drawing=drawing_id, spec_name=os.path.basename(spec_name),
+        part=spec["part"], drawing=_doc_text(drawing_id), spec_name=_doc_text(os.path.basename(spec_name)),
         script_name=f"{spec['part']}_cad.py",
         spec_json=repr(spec),
         body="\n".join(body),
@@ -384,11 +425,9 @@ def main(argv=None):
     if a.sample:
         spec, spec_path = json.loads(json.dumps(SAMPLE_SPEC)), "sample"
     elif a.spec:
-        try:
-            with open(a.spec, encoding="utf-8") as fh:
-                spec = json.load(fh)
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"error: cannot read spec: {e}", file=sys.stderr)
+        spec, err = load_json(a.spec)
+        if err:
+            print(f"error: {err}", file=sys.stderr)
             return 64
         spec_path = a.spec
     else:
@@ -407,13 +446,25 @@ def main(argv=None):
             print(f"  ? {q}", file=sys.stderr)
         return 3
 
-    code = generate(spec, spec_path)
+    try:
+        code = generate(spec, spec_path)
+    except (KeyError, TypeError, ValueError) as e:  # a spec shape the validator let through
+        print(f"Refusing to generate: cannot turn the spec into code ({type(e).__name__}: {e}).", file=sys.stderr)
+        return 2
     if a.out == "-" or (a.sample and not a.out):
-        sys.stdout.write(code)
+        if a.output == "json":
+            print(json.dumps({"written": "-", "features": len(spec.get("features", [])),
+                              "warnings": rep.warnings, "script": code}, indent=2, ensure_ascii=False))
+        else:
+            sys.stdout.write(code)
         return 0
     out = a.out or os.path.join(os.path.dirname(os.path.abspath(spec_path)), f"{spec['part']}_cad.py")
-    with open(out, "w", encoding="utf-8") as fh:
-        fh.write(code)
+    try:
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(code)
+    except OSError as e:
+        print(f"error: cannot write {out}: {e}", file=sys.stderr)
+        return 64
     if a.output == "json":
         print(json.dumps({"written": out, "features": len(spec.get("features", [])),
                           "warnings": rep.warnings}, indent=2, ensure_ascii=False))
@@ -426,4 +477,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:  # output piped into head/less that closed early
+        sys.stderr.close()
+        sys.exit(0)

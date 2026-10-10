@@ -1,0 +1,65 @@
+{
+  "schema": "assembly-spec.v1",
+  "assembly": "flange_assembly",
+  "drawing": {
+    "title": "Узел фланцевый (Flange assembly)",
+    "number": "DEMO-100",
+    "format": "A3",
+    "views": {
+      "main view (главный вид)": "section through the bushing axis; bolts М8 in the 4 x Ø9 holes, heads on the top face",
+      "top view (вид сверху)": "bolt positions 96 x 56, bushing at the centre"
+    }
+  },
+  "components": [
+    {
+      "id": "flange",
+      "part_spec": "flange_plate.spec.json",
+      "instances": [{"name": "flange"}],
+      "bom": {"section": "Детали", "format": "A3", "designation": "DEMO-001", "name": "Плита фланцевая"}
+    },
+    {
+      "id": "bushing",
+      "part_spec": "bushing.spec.json",
+      "instances": [{"name": "bushing", "placement": {"translate": [0, 0, 4]}}],
+      "bom": {"section": "Детали", "format": "A4", "designation": "DEMO-003", "name": "Втулка"}
+    },
+    {
+      "id": "bolt",
+      "part_spec": "bolt_m8x30.spec.json",
+      "instances": [
+        {"name": "bolt_1", "placement": {"translate": [-48, -28, 20], "rotate": [["Z", 30]]}},
+        {"name": "bolt_2", "placement": {"translate": [-48, 28, 20], "rotate": [["Z", 30]]}},
+        {"name": "bolt_3", "placement": {"translate": [48, -28, 20], "rotate": [["Z", 30]]}},
+        {"name": "bolt_4", "placement": {"translate": [48, 28, 20], "rotate": [["Z", 30]]}}
+      ],
+      "bom": {"section": "Стандартные изделия", "name": "Болт М8-6gx30.58 ГОСТ 7798-70",
+              "note": "модель упрощённая"}
+    },
+    {
+      "id": "grease",
+      "qty": "0,005 кг",
+      "bom": {"section": "Материалы", "name": "Смазка Литол-24 ГОСТ 21150-2017", "note": "на поверхность Ø22"}
+    }
+  ],
+  "mates": [
+    {"type": "fixed", "a": "flange"},
+    {"type": "coaxial", "a": "bushing@axis", "b": "flange@H2"},
+    {"type": "distance", "a": "bushing@<Z[1]", "b": "flange@XY", "value": 10},
+    {"type": "coaxial", "a": "bolt_1@axis", "b": "flange@H1#1"},
+    {"type": "coincident", "a": "bolt_1@-XY", "b": "flange@>Z"},
+    {"type": "coaxial", "a": "bolt_2@axis", "b": "flange@H1#2"},
+    {"type": "coincident", "a": "bolt_2@-XY", "b": "flange@>Z"},
+    {"type": "coaxial", "a": "bolt_3@axis", "b": "flange@H1#3"},
+    {"type": "coincident", "a": "bolt_3@-XY", "b": "flange@>Z"},
+    {"type": "coaxial", "a": "bolt_4@axis", "b": "flange@H1#4"},
+    {"type": "coincident", "a": "bolt_4@-XY", "b": "flange@>Z"}
+  ],
+  "expect": {"bbox_mm": [120, 80, 35.5], "tolerance_mm": 0.05},
+  "assumptions": [
+    {"id": "A1", "what": "Bushing seating", "value": "collar underside on the Ø34 counterbore floor, 10 mm above the flange base",
+     "source": "counterbore Ø34 ↧6 in a 16 mm plate (DEMO-001)"},
+    {"id": "A2", "what": "Bolt heads", "value": "bearing face on the top face of the plate, shanks through H1",
+     "source": "main view of DEMO-100 СБ"}
+  ],
+  "open_questions": []
+}

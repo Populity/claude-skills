@@ -505,6 +505,7 @@ def check_feature(rep, f, idx, ids, base):
         d = _pos(rep, where, f, "diameter")
         depth = check_depth(rep, where, f)
         pos, pat = f.get("positions"), f.get("pattern")
+        n_err = len(rep.errors)
         if pos is not None:
             if not isinstance(pos, list) or not all(_point(q) for q in pos):
                 rep.err(where, "'positions' must be a list of [x, y] pairs")
@@ -517,7 +518,7 @@ def check_feature(rep, f, idx, ids, base):
                 for e in pattern_errors(pat):
                     rep.err(where, e)
         pts = expand_positions(f)
-        if not pts and not rep.errors[-1:] or not pts and pos is None and pat is None:
+        if not pts and len(rep.errors) == n_err:  # (a malformed positions/pattern was reported above)
             rep.err(where, "hole needs 'positions' [[x, y], ...] or a 'pattern'")
         dup = len(pts) - len(set(pts))
         if dup:
@@ -726,4 +727,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:  # output piped into head/less that closed early
+        sys.stderr.close()
+        sys.exit(0)
