@@ -362,8 +362,14 @@ def main(argv=None):
     ap.add_argument("--out", default=".", help="output folder (default: current)")
     ap.add_argument("--formats", default="step,stl", help="comma list of step, stl, brep, svg")
     ap.add_argument("--stl-tolerance", type=float, default=0.01,
-                    help="STL chord tolerance in mm (smaller = finer mesh; default 0.01)")
+                    help="STL linear deflection in mm, absolute: max distance between the mesh and the true "
+                         "surface (smaller = finer mesh; default 0.01)")
+    ap.add_argument("--stl-angular-tolerance", type=float, default=0.1,
+                    help="STL angular deflection in radians between neighbouring facets (smaller = finer "
+                         "mesh on curves; default 0.1)")
     a = ap.parse_args(argv)
+    if a.stl_tolerance <= 0 or a.stl_angular_tolerance <= 0:
+        ap.error("--stl-tolerance and --stl-angular-tolerance must be > 0")
     os.makedirs(a.out, exist_ok=True)
     r = build()
     report = measure(r)
@@ -371,7 +377,12 @@ def main(argv=None):
     for fmt in [x.strip().lower() for x in a.formats.split(",") if x.strip()]:
         path = f"{{base}}.{{fmt}}"
         if fmt == "stl":
-            cq.exporters.export(r, path, tolerance=a.stl_tolerance, angularTolerance=0.1)
+            # Shape.exportStl directly: cq.exporters.export() leaves relative=True, which
+            # turns the tolerance into a fraction of each edge's length instead of mm.
+            solids = r.vals()
+            shape = solids[0] if len(solids) == 1 else cq.Compound.makeCompound(solids)
+            shape.exportStl(path, tolerance=a.stl_tolerance, angularTolerance=a.stl_angular_tolerance,
+                            relative=False)
         else:
             cq.exporters.export(r, path)
         print(f"wrote {{path}}")

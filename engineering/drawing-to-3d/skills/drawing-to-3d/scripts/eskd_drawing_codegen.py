@@ -228,13 +228,14 @@ DEFAULT_VIEWS = __VIEWS_REPR__
 
 SHEETS = {"A4": (210, 297), "A3": (420, 297), "A2": (594, 420), "A1": (841, 594), "A0": (1189, 841)}
 SCALES = __SCALES__
+PLANS = []
 FONT_STYLE, FONT_FILE, FONT_FAMILY = "GOST type A", "isocpeur.ttf", "GOST type A"
 TB_W, TB_H = 185.0, 55.0          # title block form 1
 DIM_FIRST, DIM_STEP = 10.0, 8.0   # ГОСТ 2.307: 6-10 mm to the contour, 7-10 between dimension lines
 GAP = 14.0                        # clear space between padded views
 CL_OVER = 3.0                     # centre lines run 2-5 mm past the contour
 TXT = 3.5                         # main text height
-CHAR_W = 0.62                     # text width per char / height (estimate for fitting)
+CHAR_W = 0.7                      # text width per char / height (estimate for fitting)
 
 
 # ---------------------------------------------------------------- model
@@ -461,6 +462,7 @@ def arrange(views, s, sheet, notes_h):
     W, H = SHEETS[sheet] if sheet != "A4" else (210, 297)
     for v in views.values():
         v.s = s
+    layout_callouts(views)
     f = views["front"]
     f.ox, f.oy = 0.0, 0.0
     fw, fh = f.s * f.w, f.s * f.h
@@ -486,10 +488,10 @@ def arrange(views, s, sheet, notes_h):
     forbid = [(W - 5 - TB_W, 5, W - 5, 5 + TB_H + (notes_h + 8 if notes_h else 0)),
               (20, H - 5 - 14, 90, H - 5)]                 # title block + notes, graph 26
     bw, bh = bx1 - bx0, by1 - by0
-    cands = []
-    for fx in (0.5, 0.0, 1.0, 0.25):
-        for fy in (0.5, 1.0, 0.0, 0.75):
-            cands.append((inner[0] + fx * (inner[2] - inner[0] - bw), inner[1] + fy * (inner[3] - inner[1] - bh)))
+    steps = [i / 20 for i in range(21)]
+    grid = sorted(((fx, fy) for fx in steps for fy in steps), key=lambda q: abs(q[0] - 0.5) + abs(q[1] - 0.5))
+    cands = [(inner[0] + fx * (inner[2] - inner[0] - bw), inner[1] + fy * (inner[3] - inner[1] - bh))
+             for fx, fy in grid]
     for cx, cy in cands:
         dx, dy = cx - bx0, cy - by0
         ok = True
@@ -759,9 +761,8 @@ def annotate(msp, views, model, warns):
                              dxfattribs={"layer": "AXIS"})
             counts["centre_lines"] += 1
     # --- holes: centre lines in every view, callout in the view that shows them as circles
-    shelf_rows = {}
     for hole in ANNOT["holes"]:
-        best = None
+        circ_views = []
         for u, vv in hole["pts"]:
             p, d = hole_axis(hole["face"], u, vv)
             (lo, hi), found = hole_extent(afaces, p, d, bb)
@@ -778,11 +779,8 @@ def annotate(msp, views, model, warns):
                     if hole["polar"] is None:
                         centre_cross(msp, c, v.s * hole["d_max"] / 2)
                         counts["centre_lines"] += 1
-                    visible = dot(v.n, d) * (1 if hole["face"].startswith(">") else -1) > 0 \
-                        if hole["face"][0] in "<>" else True
-                    rank = (0 if visible else 1, -c[1])
-                    if best is None or rank < best[0]:
-                        best = (rank, v, c)
+                    if v not in circ_views:
+                        circ_views.append(v)
                 else:                                          # seen from the side: axis line
                     a, b = v.p3(tuple(pa)), v.p3(tuple(pb))
                     if math.dist(a, b) < 1e-6:
@@ -791,58 +789,46 @@ def annotate(msp, views, model, warns):
                     msp.add_line((a[0] - CL_OVER * uu[0], a[1] - CL_OVER * uu[1]),
                                  (b[0] + CL_OVER * uu[0], b[1] + CL_OVER * uu[1]), dxfattribs={"layer": "AXIS"})
                     counts["centre_lines"] += 1
-        if best is None:
-            warns.append(f"hole {hole['id']}: no view shows it as a circle; callout skipped (add a view or section)")
-            continue
-        _, v, c = best
-        if hole["polar"]:
-            pc = hole["polar"]
-            p, d = hole_axis(hole["face"], pc["center"][0], pc["center"][1])
-            cc = v.p3(p)
-            rr = v.s * pc["pcd"] / 2
-            msp.add_circle(cc, rr, dxfattribs={"layer": "AXIS"})
-            for u, vv in hole["pts"]:
-                hc = v.p3(hole_axis(hole["face"], u, vv)[0])
-                ang = math.atan2(hc[1] - cc[1], hc[0] - cc[0])
-                e = v.s * hole["d_max"] / 2 + CL_OVER
-                msp.add_line((hc[0] - e * math.cos(ang), hc[1] - e * math.sin(ang)),
-                             (hc[0] + e * math.cos(ang), hc[1] + e * math.sin(ang)), dxfattribs={"layer": "THIN"})
-            dd = msp.add_diameter_dim(center=cc, radius=rr, angle=135, dimstyle="ESKD",
-                                      override={"dimlfac": 1.0 / v.s, "dimtad": 1}, dxfattribs={"layer": "DIM"})
-            dd.render()
-            counts["dimensions"] += 1
-            counts["centre_lines"] += 1
-        if hole["grid"] and v.name == "top" and len(hole["pts"]) >= 2:
-            g = hole["grid"]
-            cs = [v.p3(hole_axis(hole["face"], u, vv)[0]) for u, vv in hole["pts"]]
-            xs, ys = sorted({round(q[0], 6) for q in cs}), sorted({round(q[1], 6) for q in cs})
-            tpts = [v.to_paper(*q) for q in extents(v.geo["visible"])[1]]
-            if len(xs) > 1 and g["pitch_x"]:
-                ybot = min(q[1] for q in tpts)
-                linear_dim(msp, (xs[0], ys[0]), (xs[1], ys[0]), (xs[0], ybot - DIM_FIRST), 0, v.s)
-                counts["dimensions"] += 1
-            if len(ys) > 1 and g["pitch_y"]:
-                xl = min(q[0] for q in tpts)
-                linear_dim(msp, (xs[0], ys[0]), (xs[0], ys[1]), (xl - DIM_FIRST, ys[0]), 90, v.s)
-                counts["dimensions"] += 1
-        # leader with a shelf to the right of the view, rows stacked from the top
-        lines = [ln for ln in hole["callout"] if ln]
-        tx = v.ox + v.s * v.w + 8
-        row = shelf_rows.get(v.name, 0)
-        ty = v.oy + v.s * v.h - 2 - row
-        shelf_rows[v.name] = row + (6 if len(lines) == 1 else 11)
-        r = v.s * hole["d"] / 2
-        ang = math.atan2(ty - c[1], tx - c[0])
-        start = (c[0] + r * math.cos(ang), c[1] + r * math.sin(ang))
-        width = max(tw(s, TXT) for s in lines) + 2
-        ld = msp.add_leader([start, (tx, ty), (tx + width, ty)], dimstyle="ESKD",
-                            override={"dimasz": 3.0}, dxfattribs={"layer": "DIM"})
-        text(msp, lines[0], tx + 1, ty + 1, TXT, align="BOTTOM_LEFT")
-        if len(lines) > 1:
-            text(msp, lines[1], tx + 1, ty - 1, TXT, align="TOP_LEFT")
-        counts["callouts"] += 1
-        _ = ld
+        main = next((pl["view"] for pl in PLANS if pl and pl["hole"] is hole), None)
+        for v in circ_views:
+            draw_pattern(msp, v, hole, v.name == main, counts)
     return counts
+
+
+def draw_pattern(msp, v, hole, main, counts):
+    """PCD circle + radial centre marks for a polar pattern; pitch dims for a grid (plan view)."""
+    if hole["polar"]:
+        pc = hole["polar"]
+        p, d = hole_axis(hole["face"], pc["center"][0], pc["center"][1])
+        cc = v.p3(p)
+        rr = v.s * pc["pcd"] / 2
+        msp.add_circle(cc, rr, dxfattribs={"layer": "AXIS"})
+        for u, vv in hole["pts"]:
+            hc = v.p3(hole_axis(hole["face"], u, vv)[0])
+            ang = math.atan2(hc[1] - cc[1], hc[0] - cc[0])
+            e = v.s * hole["d_max"] / 2 + CL_OVER
+            msp.add_line((hc[0] - e * math.cos(ang), hc[1] - e * math.sin(ang)),
+                         (hc[0] + e * math.cos(ang), hc[1] + e * math.sin(ang)), dxfattribs={"layer": "THIN"})
+        counts["centre_lines"] += 1
+        if not main:
+            return
+        dd = msp.add_diameter_dim(center=cc, radius=rr, angle=135, dimstyle="ESKD",
+                                  override={"dimlfac": 1.0 / v.s, "dimtad": 1}, dxfattribs={"layer": "DIM"})
+        dd.render()
+        counts["dimensions"] += 1
+    if hole["grid"] and v.name == "top" and len(hole["pts"]) >= 2:
+        g = hole["grid"]
+        cs = [v.p3(hole_axis(hole["face"], u, vv)[0]) for u, vv in hole["pts"]]
+        xs, ys = sorted({round(q[0], 6) for q in cs}), sorted({round(q[1], 6) for q in cs})
+        tpts = [v.to_paper(*q) for q in extents(v.geo["visible"])[1]]
+        if len(xs) > 1 and g["pitch_x"]:
+            ybot = min(q[1] for q in tpts)
+            linear_dim(msp, (xs[0], ys[0]), (xs[1], ys[0]), (xs[0], ybot - DIM_FIRST), 0, v.s)
+            counts["dimensions"] += 1
+        if len(ys) > 1 and g["pitch_y"]:
+            xl = min(q[0] for q in tpts)
+            linear_dim(msp, (xs[0], ys[0]), (xs[0], ys[1]), (xl - DIM_FIRST, ys[0]), 90, v.s)
+            counts["dimensions"] += 1
 
 
 def v_has_pitch(views, name, axis):
@@ -853,17 +839,83 @@ def v_has_pitch(views, name, axis):
                for h in ANNOT["holes"])
 
 
-def callout_pad(views):
-    """Right padding per view for hole callout shelves (needs only view directions)."""
-    need = {}
+def plan_callouts(views):
+    """Pick, per hole feature, the view that shows it as a circle (visible preferred) and the
+    instance nearest the outside. Top-row views (front, left) get shelves ABOVE the view;
+    the plan view (top) gets them to the RIGHT. Scale-independent."""
+    plans = []
     for hole in ANNOT["holes"]:
-        p, d = hole_axis(hole["face"], *hole["pts"][0])
-        for v in views.values():
-            if v.name != "iso" and abs(abs(dot(v.n, d)) - 1) < 1e-6:
-                lines = [ln for ln in hole["callout"] if ln]
-                need[v.name] = max(need.get(v.name, 0), max(tw(s, TXT) for s in lines) + 14)
-                break
-    return need
+        best = None
+        for u, vv in hole["pts"]:
+            p, d = hole_axis(hole["face"], u, vv)
+            for v in views.values():
+                if v.name == "iso" or abs(abs(dot(v.n, d)) - 1) > 1e-6:
+                    continue
+                visible = (dot(v.n, d) * (1 if hole["face"][0] == ">" else -1) > 0) if hole["face"][0] in "<>" else True
+                px, py = dot(p, v.x), dot(p, v.y)
+                rank = (0 if visible else 1, ("front", "left", "top").index(v.name),
+                        -(py * 1000 + px if v.name != "top" else px + py))   # nearest the shelf
+                if best is None or rank < best[0]:
+                    best = (rank, v.name, p)
+        plans.append(None if best is None else {
+            "hole": hole, "view": best[1], "p": best[2], "mode": "right" if best[1] == "top" else "above",
+            "lines": [ln for ln in hole["callout"] if ln]})
+    return plans
+
+
+def layout_callouts(views):
+    """Shelf positions relative to each view's origin at the current scale; sets paddings."""
+    for v in views.values():
+        v.calls = []
+        v.pad["t"] = 6.0
+        v.pad["r"] = max(6.0, v.pad.get("r_dims", 6.0))
+    for pl in PLANS:
+        if pl is not None and pl["view"] in views:
+            views[pl["view"]].calls.append(pl)
+    for v in views.values():
+        if not v.calls:
+            continue
+        s = v.s
+        rel = lambda p: ((dot(p, v.x) - v.xmin) * s, (dot(p, v.y) - v.ymin) * s)  # noqa: E731
+        right_edge = v.w * s
+        if v.calls[0]["mode"] == "above":
+            cur = v.h * s + 4
+            for pl in sorted(v.calls, key=lambda q: -rel(q["p"])[0]):   # rightmost hole -> lowest shelf
+                c = rel(pl["p"])
+                below = (TXT + 1.5) if len(pl["lines"]) > 1 else 0
+                ty = cur + below + 1
+                cur = ty + TXT + 4.5
+                pl["c"], pl["t"] = c, (c[0] + s * pl["hole"]["d"] / 2 + 6, ty)
+                right_edge = max(right_edge, pl["t"][0] + max(tw(x, TXT) for x in pl["lines"]) + 3)
+            v.pad["t"] = cur - v.h * s + 3
+        else:
+            cur = v.h * s
+            for pl in sorted(v.calls, key=lambda q: -rel(q["p"])[1]):    # highest hole -> top shelf
+                c = rel(pl["p"])
+                ty = cur - TXT - 1.5
+                cur = ty - ((TXT + 1.5) if len(pl["lines"]) > 1 else 0) - 5
+                pl["c"], pl["t"] = c, (v.w * s + 8, ty)
+                right_edge = max(right_edge, pl["t"][0] + max(tw(x, TXT) for x in pl["lines"]) + 3)
+        v.pad["r"] = max(v.pad["r"], right_edge - v.w * s + 2)
+
+
+def draw_callouts(msp, views):
+    n = 0
+    for v in views.values():
+        for pl in getattr(v, "calls", []):
+            c = (v.ox + pl["c"][0], v.oy + pl["c"][1])
+            tx, ty = v.ox + pl["t"][0], v.oy + pl["t"][1]
+            r = v.s * pl["hole"]["d"] / 2
+            ang = math.atan2(ty - c[1], tx - c[0])
+            start = (c[0] + r * math.cos(ang), c[1] + r * math.sin(ang))
+            width = max(tw(x, TXT) for x in pl["lines"]) + 2
+            msp.add_leader([start, (tx, ty), (tx + width, ty)], dimstyle="ESKD",
+                           override={"dimasz": 3.0}, dxfattribs={"layer": "DIM"})
+            text(msp, pl["lines"][0], tx + 1, ty + 1, TXT, align="BOTTOM_LEFT")
+            if len(pl["lines"]) > 1:
+                text(msp, pl["lines"][1], tx + 1, ty - 1, TXT, align="TOP_LEFT")
+            n += 1
+    return n
 
 
 def notes_block(msp, sheet, notes):
@@ -968,8 +1020,11 @@ def main(argv=None):
         t.pad["b"] = DIM_FIRST + 8 + (DIM_STEP if v_has_pitch(views, "top", "x") else 0)
     elif not revolved and "left" in views:
         views["left"].pad["b"] = DIM_FIRST + 8
-    for name, w in callout_pad(views).items():
-        views[name].pad["r"] = max(views[name].pad["r"], w)
+    global PLANS
+    PLANS = plan_callouts(views)
+    for pl, hole in zip(PLANS, ANNOT["holes"]):
+        if pl is None:
+            warns.append(f"hole {hole['id']}: no view shows it as a circle; callout skipped (add a view or section)")
     nh = notes_height()
     max_dim = max(bb.xlen, bb.ylen, bb.zlen)
     sheet, s, scale_label, fits = choose(views, a.sheet, scale_arg, nh, max_dim)
@@ -983,6 +1038,7 @@ def main(argv=None):
         add_prims(msp, v, v.geo["hidden"], "HIDDEN")
         add_prims(msp, v, v.geo["visible"], "CONTOUR")
     counts = annotate(msp, views, {"bb": bb, "afaces": axis_faces(shape)}, warns)
+    counts["callouts"] = draw_callouts(msp, views)
     notes_block(msp, sheet, ANNOT["notes"])
     rho = ANNOT["density_g_cm3"]
     mass = report["volume_mm3"] * rho * 1e-6 if rho else ANNOT["mass_kg"]

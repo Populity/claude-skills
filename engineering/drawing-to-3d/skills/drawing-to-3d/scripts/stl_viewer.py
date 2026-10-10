@@ -44,7 +44,7 @@ def read_stl(data):
         if n == 0 and len(data) == 84:
             raise ValueError("binary STL with zero triangles")
     text = data.decode("utf-8", errors="ignore")
-    if "facet" not in text:
+    if "facet" not in text.lower():
         raise ValueError("not an STL (neither binary nor ASCII)")
     out = []
     for line in text.splitlines():

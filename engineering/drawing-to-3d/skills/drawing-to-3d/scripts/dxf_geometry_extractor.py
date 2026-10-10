@@ -322,6 +322,9 @@ def _arc_points(x, y, r, a0, a1):
 
 
 def extract(text):
+    # R2000-R2004 files written in a Latin code page store other characters as \U+XXXX
+    # in every string (layer names, text): unescape them before anything compares names.
+    text = re.sub(r"\\U\+([0-9A-Fa-f]{4})", lambda m: chr(int(m.group(1), 16)), text)
     units, ents, layer_ltype = parse(text)
     xs, ys = [], []
     circles = defaultdict(list)
