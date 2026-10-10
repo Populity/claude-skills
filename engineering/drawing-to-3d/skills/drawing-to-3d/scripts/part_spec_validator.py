@@ -65,7 +65,12 @@ SAMPLE_SPEC = {
          "depth": 4},
         {"id": "S1", "type": "slot", "face": ">Z", "at": [0, -30], "length": 30, "width": 8,
          "angle_deg": 0, "depth": 5},
-        {"id": "C1", "type": "chamfer", "edges": ">Z", "size": 1},
+        # Outer top outline only (the 4 sides + 4 corner arcs): a ">Z" selector would
+        # also hit the slot and hole rims, and OCC fails where those sit < 1 mm apart.
+        {"id": "C1", "type": "chamfer", "size": 1,
+         "edges": {"near": [[0, 40, 16], [0, -40, 16], [60, 0, 16], [-60, 0, 16],
+                            [57.657, 37.657, 16], [-57.657, 37.657, 16],
+                            [57.657, -37.657, 16], [-57.657, -37.657, 16]]}},
     ],
     "expect": {"bbox_mm": [120, 80, 16], "tolerance_mm": 0.05},
     "assumptions": [
@@ -74,6 +79,27 @@ SAMPLE_SPEC = {
     ],
     "open_questions": [],
 }
+
+
+MAX_INSTANCES = 10000  # hole instances per feature: a typo'd count must not hang the build
+
+
+def load_json(path):
+    """Read a JSON file. Returns (obj, None) or (None, message) — never raises.
+
+    NaN / Infinity are not JSON; they are kept as the strings "NaN" / "Infinity"
+    so the field checks reject them with a normal spec error instead of letting
+    them reach the generated script as bare names.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh, parse_constant=lambda c: c), None
+    except (OSError, ValueError, RecursionError) as e:  # ValueError covers JSON + UTF-8 errors
+        return None, f"cannot read {path}: {e}"
+
+
+def _hashable(v):
+    return v is None or isinstance(v, (str, int, float, bool))
 
 
 class Report:
@@ -111,10 +137,16 @@ def _point(v):
 # ---------------------------------------------------------------- patterns
 
 def expand_positions(feat):
-    """Return explicit [(x, y), ...] for a feature's positions/pattern (or [] if none)."""
-    pts = [tuple(float(c) for c in p) for p in feat.get("positions", []) if _point(p)]
+    """Return explicit [(x, y), ...] for a feature's positions/pattern (or [] if none).
+
+    Never raises: malformed entries are skipped here and reported by check_pattern().
+    """
+    if not isinstance(feat, dict):
+        return []
+    pos = feat.get("positions", [])
+    pts = [tuple(float(c) for c in p) for p in (pos if isinstance(pos, list) else []) if _point(p)]
     pat = feat.get("pattern")
-    if isinstance(pat, dict):
+    if isinstance(pat, dict) and not pattern_errors(pat):
         kind = pat.get("type")
         cx, cy = (pat.get("center") or [0, 0])[:2]
         if kind == "polar":
@@ -144,6 +176,104 @@ def expand_positions(feat):
     return pts
 
 
+def pattern_errors(pat):
+    """Problems with a pattern object, as a list of messages ([] = expandable)."""
+    errs = []
+
+    def need_int(key, lo, default=None):
+        v = pat.get(key, default)
+        if not isinstance(v, int) or isinstance(v, bool) or v < lo:
+            errs.append(f"pattern.{key} must be an integer >= {lo}, got {v!r}")
+            return None
+        if v > MAX_INSTANCES:
+            errs.append(f"pattern.{key} = {v} is more than {MAX_INSTANCES} instances")
+            return None
+        return v
+
+    def need_num(key, positive=False, default=None):
+        v = pat.get(key, default)
+        if not _num(v) or (positive and v <= 0):
+            errs.append(f"pattern.{key} must be a {'positive ' if positive else ''}number, got {v!r}")
+            return None
+        return v
+
+    for key in ("center", "start"):
+        if key in pat and pat[key] is not None and not _point(pat[key]):
+            errs.append(f"pattern.{key} must be [x, y]")
+    kind = pat.get("type")
+    if kind == "polar":
+        need_int("count", 1)
+        need_num("pcd", positive=True)
+        need_num("start_angle_deg", default=0)
+        span = need_num("span_deg", default=360)
+        if span is not None and not 0 < span <= 360:
+            errs.append("pattern.span_deg must be in (0, 360]: the angle from the first to the last hole (360 = full circle)")
+    elif kind == "grid":
+        nx, ny = need_int("nx", 1, 1), need_int("ny", 1, 1)
+        if nx and nx > 1:
+            need_num("pitch_x", positive=True)
+        if ny and ny > 1:
+            need_num("pitch_y", positive=True)
+        if nx and ny and nx * ny > MAX_INSTANCES:
+            errs.append(f"pattern grid nx*ny = {nx * ny} is more than {MAX_INSTANCES} instances")
+    elif kind == "linear":
+        n = need_int("count", 1)
+        if n and n > 1:
+            need_num("pitch", positive=True)
+        need_num("direction_deg", default=0)
+    else:
+        errs.append(f"pattern.type must be polar | grid | linear, got {kind!r}")
+    return errs
+
+
+def face_axis_point(face, u, v):
+    """(point, direction) of a hole axis at drawing coordinates (u, v) on a face/datum.
+
+    The axis is normal to the face, so the face's own offset does not matter:
+    +-Z / XY use (X, Y); +-X / YZ use (Y, Z); +-Y / XZ use (X, Z).
+    """
+    if face in ("XY", ">Z", "<Z"):
+        return (u, v, 0.0), (0.0, 0.0, 1.0)
+    if face in ("YZ", ">X", "<X"):
+        return (0.0, u, v), (1.0, 0.0, 0.0)
+    return (u, 0.0, v), (0.0, 1.0, 0.0)
+
+
+def _segments_cross(a, b, c, d):
+    """True if closed segments ab and cd intersect (collinear overlap included)."""
+    def orient(p, q, r):
+        v = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+        return 0 if abs(v) < 1e-12 else (1 if v > 0 else -1)
+
+    def on_seg(p, q, r):
+        return min(p[0], r[0]) - 1e-12 <= q[0] <= max(p[0], r[0]) + 1e-12 and \
+            min(p[1], r[1]) - 1e-12 <= q[1] <= max(p[1], r[1]) + 1e-12
+    o1, o2, o3, o4 = orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b)
+    if o1 != o2 and o3 != o4:
+        return True
+    return (o1 == 0 and on_seg(a, c, b)) or (o2 == 0 and on_seg(a, d, b)) or \
+        (o3 == 0 and on_seg(c, a, d)) or (o4 == 0 and on_seg(c, b, d))
+
+
+def polygon_problem(pts):
+    """None if pts is a simple polygon, else a message (duplicates, zero area, self-crossing)."""
+    pts = [(float(p[0]), float(p[1])) for p in pts]
+    if len(set(pts)) != len(pts):
+        return "contains duplicate vertices"
+    area = sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1]
+               for i in range(len(pts))) / 2
+    if abs(area) < 1e-9:
+        return "has zero area (all points on one line)"
+    n = len(pts)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if j == i + 1 or (i == 0 and j == n - 1):
+                continue  # neighbouring edges share a vertex
+            if _segments_cross(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n]):
+                return f"edges {i}-{(i + 1) % n} and {j}-{(j + 1) % n} cross (self-intersecting outline)"
+    return None
+
+
 def base_footprint(base):
     """Half-extents (hx, hy) of the base in XY, or None if unknown."""
     if not isinstance(base, dict):
@@ -162,14 +292,56 @@ def base_footprint(base):
                 xs = [abs(float(q[0])) for q in p["points"]]
                 ys = [abs(float(q[1])) for q in p["points"]]
                 return max(xs), max(ys)
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, IndexError):
             return None
     if base.get("type") == "revolve":
         try:
             r = max(float(q[0]) for q in base["profile_rz"])
             return r, r
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, IndexError):
             return None
+    return None
+
+
+def base_zrange(base):
+    if not isinstance(base, dict):
+        return None
+    if base.get("type") == "extrude" and _num(base.get("height")):
+        return 0.0, float(base["height"])
+    if base.get("type") == "revolve":
+        try:
+            zs = [float(q[1]) for q in base["profile_rz"]]
+            return min(zs), max(zs)
+        except (KeyError, TypeError, ValueError, IndexError):
+            return None
+    return None
+
+
+def breakout(base, face, u, v, r):
+    """Why a hole of radius r at (u, v) on `face` leaves the base body, or None.
+
+    A warning-level check against the base's simple envelope (a rectangle,
+    circle or revolved radius); features added later are not considered.
+    """
+    fp, zr = base_footprint(base), base_zrange(base)
+    if not fp:
+        return None
+    hx, hy = fp
+    prof = (base.get("profile") or {}) if base.get("type") == "extrude" else {}
+    round_base = base.get("type") == "revolve" or prof.get("shape") == "circle"
+    if face in (">Z", "<Z", "XY"):
+        if round_base:
+            if math.hypot(u, v) + r > hx + 1e-6:
+                return f"breaks out of the Ø{2 * hx:g} outline"
+        elif abs(u) + r > hx + 1e-6 or abs(v) + r > hy + 1e-6:
+            return f"breaks out of the base footprint ±{hx:g}×±{hy:g}"
+        return None
+    if face in (">X", "<X", "YZ", ">Y", "<Y", "XZ"):
+        lateral = hy if face in (">X", "<X", "YZ") else hx
+        if abs(u) + r > lateral + 1e-6:
+            return f"is outside the side face (±{lateral:g} wide)"
+        if zr and (v - r < zr[0] - 1e-6 or v + r > zr[1] + 1e-6):
+            return f"is outside the part height (z {zr[0]:g}..{zr[1]:g})"
     return None
 
 
@@ -182,7 +354,7 @@ def base_height(base):
         try:
             zs = [float(q[1]) for q in base["profile_rz"]]
             return max(zs) - min(zs)
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, IndexError):
             return None
     return None
 
@@ -194,7 +366,7 @@ def check_profile(rep, where, p):
         rep.err(where, "'profile' must be an object")
         return
     s = p.get("shape")
-    if s not in PROFILE_SHAPES:
+    if not _hashable(s) or s not in PROFILE_SHAPES:
         rep.err(where, f"profile.shape must be one of {sorted(PROFILE_SHAPES)}, got {s!r}")
         return
     if s == "rect":
@@ -206,6 +378,7 @@ def check_profile(rep, where, p):
                 rep.err(where, "corner_radius must be >= 0")
             elif w and l and cr * 2 >= min(w, l):
                 rep.err(where, f"corner_radius {cr} must be < half the smaller side ({min(w, l) / 2})")
+        _angle(rep, where, p)
     elif s == "circle":
         _pos(rep, where, p, "diameter")
     elif s == "slot":
@@ -213,21 +386,50 @@ def check_profile(rep, where, p):
         W = _pos(rep, where, p, "width")
         if L and W and L <= W:
             rep.err(where, "slot length (overall, end to end) must exceed its width")
+        _angle(rep, where, p)
     elif s == "regular_polygon":
         n = p.get("sides")
-        if not isinstance(n, int) or n < 3:
-            rep.err(where, "regular_polygon.sides must be an integer >= 3")
-        if p.get("across_flats") is not None and p.get("across_corners") is None:
+        n_ok = isinstance(n, int) and not isinstance(n, bool) and 3 <= n <= 360
+        if not n_ok:
+            rep.err(where, f"regular_polygon.sides must be an integer 3..360, got {n!r}")
+        if p.get("across_flats") is not None:
             af = _pos(rep, where, p, "across_flats")
-            if af and isinstance(n, int) and n >= 3:
-                p["across_corners"] = round(af / math.cos(math.pi / n), 6)
+            if af and n_ok:
+                ac = round(af / math.cos(math.pi / n), 6)
+                if p.get("across_corners") is None:
+                    p["across_corners"] = ac
+                elif _num(p["across_corners"]) and abs(p["across_corners"] - ac) > 1e-3 * ac:
+                    rep.err(where, f"across_flats {af} and across_corners {p['across_corners']} disagree for "
+                                   f"{n} sides (across_flats {af} gives across_corners {ac}); give only one")
         _pos(rep, where, p, "across_corners")
     elif s == "polygon":
         pts = p.get("points")
         if not isinstance(pts, list) or len(pts) < 3 or not all(_point(q) for q in pts):
             rep.err(where, "polygon.points must be a list of >= 3 [x, y] pairs")
-        elif len({tuple(q) for q in pts}) != len(pts):
-            rep.err(where, "polygon.points contains duplicate vertices")
+        else:
+            prob = polygon_problem(pts)
+            if prob:
+                rep.err(where, f"polygon.points {prob}")
+
+
+def _angle(rep, where, obj, key="angle_deg"):
+    v = obj.get(key)
+    if v is not None and not _num(v):
+        rep.err(where, f"'{key}' must be a number (degrees), got {v!r}")
+
+
+def check_profile_rz(rep, where, prof):
+    if not isinstance(prof, list) or len(prof) < 3 or not all(_point(q) for q in prof):
+        rep.err(where, "profile_rz must be a list of >= 3 [r, z] pairs (r = radius, z = axial)")
+        return
+    if any(q[0] < 0 for q in prof):
+        rep.err(where, "profile_rz radii must be >= 0 (the profile may touch but not cross the axis)")
+    elif max(q[0] for q in prof) <= 0:
+        rep.err(where, "profile_rz has zero radius everywhere")
+    else:
+        prob = polygon_problem(prof)
+        if prob:
+            rep.err(where, f"profile_rz {prob}")
 
 
 def check_base(rep, base):
@@ -240,14 +442,7 @@ def check_base(rep, base):
         check_profile(rep, where, base.get("profile"))
         _pos(rep, where, base, "height")
     elif t == "revolve":
-        prof = base.get("profile_rz")
-        if not isinstance(prof, list) or len(prof) < 3 or not all(_point(q) for q in prof):
-            rep.err(where, "profile_rz must be a list of >= 3 [r, z] pairs (r = radius, z = axial)")
-        else:
-            if any(q[0] < 0 for q in prof):
-                rep.err(where, "profile_rz radii must be >= 0 (the profile may touch but not cross the axis)")
-            if max(q[0] for q in prof) <= 0:
-                rep.err(where, "profile_rz has zero radius everywhere")
+        check_profile_rz(rep, where, base.get("profile_rz"))
     else:
         rep.err(where, "base.type must be 'extrude' (prismatic, along +Z) or 'revolve' (turned, about Z)")
 
@@ -288,10 +483,13 @@ def check_feature(rep, f, idx, ids, base):
     else:
         ids.add(fid)
     t = f.get("type")
-    if t not in FEATURE_TYPES:
+    if not _hashable(t) or t not in FEATURE_TYPES:
         rep.err(where, f"type must be one of {sorted(FEATURE_TYPES)}, got {t!r}")
         return
 
+    if not _hashable(f.get("face")):
+        rep.err(where, f"'face' must be a string such as \">Z\" or \"YZ\", got {f.get('face')!r}")
+        return
     if t in {"hole", "pocket", "slot"} and f.get("face") in DATUMS:
         if f.get("depth") != "through":
             rep.err(where, f"on datum plane {f['face']} the cut goes through both ways: depth must be \"through\"")
@@ -306,12 +504,24 @@ def check_feature(rep, f, idx, ids, base):
     if t == "hole":
         d = _pos(rep, where, f, "diameter")
         depth = check_depth(rep, where, f)
+        pos, pat = f.get("positions"), f.get("pattern")
+        if pos is not None:
+            if not isinstance(pos, list) or not all(_point(q) for q in pos):
+                rep.err(where, "'positions' must be a list of [x, y] pairs")
+            elif len(pos) > MAX_INSTANCES:
+                rep.err(where, f"more than {MAX_INSTANCES} positions")
+        if pat is not None:
+            if not isinstance(pat, dict):
+                rep.err(where, "'pattern' must be an object with a 'type' (polar | grid | linear)")
+            else:
+                for e in pattern_errors(pat):
+                    rep.err(where, e)
         pts = expand_positions(f)
-        if not pts:
+        if not pts and not rep.errors[-1:] or not pts and pos is None and pat is None:
             rep.err(where, "hole needs 'positions' [[x, y], ...] or a 'pattern'")
-        pat = f.get("pattern")
-        if isinstance(pat, dict) and pat.get("type") not in {"polar", "grid", "linear"}:
-            rep.err(where, "pattern.type must be polar | grid | linear")
+        dup = len(pts) - len(set(pts))
+        if dup:
+            rep.warn(where, f"{dup} hole position(s) repeated (positions + pattern overlap?)")
         cb, ck = f.get("cbore"), f.get("csk")
         if cb and ck:
             rep.err(where, "a hole has either 'cbore' or 'csk', not both")
@@ -322,6 +532,9 @@ def check_feature(rep, f, idx, ids, base):
                 rep.err(where, f"counterbore Ø{cd} must exceed hole Ø{d}")
             if isinstance(depth, float) and cdp and cdp >= depth:
                 rep.err(where, "counterbore depth must be less than hole depth")
+            h = base_height(base)
+            if depth == "through" and cdp and h and cdp >= h - 1e-6 and f.get("face") in {">Z", "<Z"}:
+                rep.err(where, f"counterbore depth {cdp} reaches the full part height {h}: nothing is left of the hole")
         if isinstance(ck, dict):
             kd = _pos(rep, where + ".csk", ck, "diameter")
             ang = ck.get("angle_deg", 90)
@@ -329,13 +542,12 @@ def check_feature(rep, f, idx, ids, base):
                 rep.err(where, "csk.angle_deg must be between 30 and 150 (usually 90)")
             if d and kd and kd <= d:
                 rep.err(where, f"countersink Ø{kd} must exceed hole Ø{d}")
-        if fp and d and f.get("face") in {">Z", "<Z"}:
-            hx, hy = fp
-            outer = cb if isinstance(cb, dict) else ck if isinstance(ck, dict) else {}
-            r_out = (outer["diameter"] if _num(outer.get("diameter")) else d) / 2
-            for (x, y) in pts:
-                if abs(x) + r_out > hx + 1e-6 or abs(y) + r_out > hy + 1e-6:
-                    rep.warn(where, f"hole at ({x}, {y}) breaks out of the base footprint ±{hx}×±{hy} — check the drawing")
+        outer = cb if isinstance(cb, dict) else ck if isinstance(ck, dict) else {}
+        r_out = ((outer["diameter"] if _num(outer.get("diameter")) and outer["diameter"] > 0 else d) or 0) / 2
+        for (x, y) in (pts if d else []):
+            why = breakout(base, f.get("face"), x, y, r_out)
+            if why:
+                rep.warn(where, f"hole at ({x}, {y}) {why} — check the drawing")
         h = base_height(base)
         if isinstance(depth, float) and h and depth > h + 1e-6 and f.get("face") in {">Z", "<Z"}:
             rep.warn(where, f"blind depth {depth} exceeds part height {h}; use \"through\" if it is through")
@@ -352,6 +564,7 @@ def check_feature(rep, f, idx, ids, base):
         W = _pos(rep, where, f, "width")
         if L and W and L <= W:
             rep.err(where, "slot 'length' is overall end-to-end and must exceed 'width'")
+        _angle(rep, where, f)
         if not _point(f.get("at", [0, 0])):
             rep.err(where, "'at' must be [x, y]")
         check_depth(rep, where, f)
@@ -367,9 +580,7 @@ def check_feature(rep, f, idx, ids, base):
             _pos(rep, where, f, "size2")
         check_edges(rep, where, f.get("edges"))
     elif t == "revolve_cut":
-        prof = f.get("profile_rz")
-        if not isinstance(prof, list) or len(prof) < 3 or not all(_point(q) for q in prof):
-            rep.err(where, "revolve_cut.profile_rz must be >= 3 [r, z] pairs")
+        check_profile_rz(rep, where + " revolve_cut", f.get("profile_rz"))
     elif t == "shell":
         th = f.get("thickness")
         if not _num(th) or th == 0:
@@ -379,6 +590,8 @@ def check_feature(rep, f, idx, ids, base):
             rep.err(where, "thread needs a 'designation' exactly as on the drawing, e.g. 'M8x1.25-6H'")
         if not isinstance(f.get("on"), str):
             rep.err(where, "thread needs 'on': the id of the hole or boss it is cut in")
+        if f.get("length") is not None:
+            _pos(rep, where, f, "length")
 
 
 def validate(spec):
@@ -389,7 +602,7 @@ def validate(spec):
     if spec.get("schema") != SCHEMA:
         rep.err("schema", f"must be {SCHEMA!r}")
     part = spec.get("part")
-    if not isinstance(part, str) or not re.match(r"^[A-Za-z0-9_\-]{1,64}$", part or ""):
+    if not isinstance(part, str) or not re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", part):
         rep.err("part", "must be a file-safe name: letters, digits, '_' or '-' (max 64)")
     if spec.get("units") != "mm":
         rep.err("units", "must be \"mm\". Convert inch drawings first (x 25.4) so STEP export is unambiguous")
@@ -403,9 +616,14 @@ def validate(spec):
     ids = set()
     for i, f in enumerate(feats):
         check_feature(rep, f, i, ids, base)
+    types = {f.get("id"): f.get("type") for f in feats if isinstance(f, dict) and isinstance(f.get("id"), str)}
     for i, f in enumerate(feats):
-        if isinstance(f, dict) and f.get("type") == "thread" and f.get("on") not in ids:
-            rep.err(f"features[{i}] ({f.get('id')})", f"thread refers to unknown feature {f.get('on')!r}")
+        if isinstance(f, dict) and f.get("type") == "thread" and isinstance(f.get("on"), str):
+            where = f"features[{i}] ({f.get('id')})"
+            if f["on"] not in ids:
+                rep.err(where, f"thread refers to unknown feature {f.get('on')!r}")
+            elif types.get(f["on"]) not in {"hole", "boss"}:
+                rep.warn(where, f"thread is on {f['on']!r}, a {types.get(f['on'])}; threads are cut in a hole or on a boss")
     # Fillets/chamfers before solid-adding features usually means a misread order.
     seen_finish = False
     for f in feats:
@@ -424,13 +642,30 @@ def validate(spec):
         bb = exp["bbox_mm"]
         if not (isinstance(bb, list) and len(bb) == 3 and all(_num(c) and c > 0 for c in bb)):
             rep.err("expect.bbox_mm", "must be [X, Y, Z] overall sizes in mm")
+        tol = exp.get("tolerance_mm")
+        if tol is not None and (not _num(tol) or tol <= 0):
+            rep.err("expect.tolerance_mm", f"must be a positive number in mm, got {tol!r}")
     if spec.get("mass_kg") is not None and (not _num(spec["mass_kg"]) or spec["mass_kg"] <= 0):
         rep.err("mass_kg", "must be a positive number (the title-block mass) or null")
+    if spec.get("density_g_cm3") is not None and (not _num(spec["density_g_cm3"]) or spec["density_g_cm3"] <= 0):
+        rep.err("density_g_cm3", "must be a positive number in g/cm³ (e.g. 7.85 for steel) or absent")
+    if spec.get("drawing") is not None and not isinstance(spec["drawing"], dict):
+        rep.err("drawing", "must be an object such as {\"title\": ..., \"number\": ..., \"scale\": ...}")
 
-    for i, a in enumerate(spec.get("assumptions", []) or []):
+    assumptions = spec.get("assumptions", []) or []
+    if not isinstance(assumptions, list):
+        rep.err("assumptions", "must be a list of {what, value, source} objects")
+        assumptions = []
+    for i, a in enumerate(assumptions):
         if not isinstance(a, dict) or not a.get("what") or "value" not in a:
             rep.err(f"assumptions[{i}]", "each assumption needs 'what' and 'value' (and ideally 'source')")
-    open_q = [q for q in (spec.get("open_questions") or []) if q]
+    oq = spec.get("open_questions") or []
+    if isinstance(oq, str):
+        oq = [oq]  # a single question written as a string still blocks generation
+    if not isinstance(oq, list):
+        rep.err("open_questions", "must be a list of questions (strings)")
+        oq = []
+    open_q = [q if isinstance(q, str) else json.dumps(q, ensure_ascii=False) for q in oq if q]
     return rep, open_q
 
 
@@ -451,11 +686,9 @@ def main(argv=None):
     if a.sample:
         spec = json.loads(json.dumps(SAMPLE_SPEC))
     elif a.spec:
-        try:
-            with open(a.spec, encoding="utf-8") as fh:
-                spec = json.load(fh)
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"error: cannot read spec: {e}", file=sys.stderr)
+        spec, err = load_json(a.spec)
+        if err:
+            print(f"error: {err}", file=sys.stderr)
             return 64
     else:
         ap.print_usage(sys.stderr)
@@ -472,6 +705,7 @@ def main(argv=None):
         code, verdict = 0, "VALID"
 
     feats = spec.get("features", []) if isinstance(spec, dict) else []
+    feats = feats if isinstance(feats, list) else []
     holes = sum(len(expand_positions(f)) for f in feats if isinstance(f, dict) and f.get("type") == "hole")
     if a.output == "json":
         print(json.dumps({"verdict": verdict, "exit": code, "errors": rep.errors,
