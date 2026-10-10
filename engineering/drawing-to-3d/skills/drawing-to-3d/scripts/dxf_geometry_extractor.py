@@ -432,15 +432,24 @@ def extract(text):
 
 
 def decode_bytes(raw):
-    """UTF-8 (R2007+ files, or a BOM) first; else the header's $DWGCODEPAGE (e.g.
-    ANSI_1251 for a Russian R12/R2000 file); else cp1251; latin-1 never fails."""
+    """Decode a DXF's bytes to text.
+
+    UTF-8 first (R2007+ files, or a BOM). Otherwise a legacy 8-bit file: the
+    header's $DWGCODEPAGE (ANSI_1251 for Russian) is used — unless the header says
+    a Latin page (ANSI_1252, which many exporters write regardless) while the text
+    is plainly Cyrillic: runs of 3+ bytes in 0xC0-0xFF are words in cp1251, not
+    accented Latin letters. latin-1 is the last resort and never fails.
+    """
     try:
         return raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         pass
     m = re.search(rb"\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*ANSI_(\d+)", raw[:20000])
-    encs = ([f"cp{m.group(1).decode()}"] if m else []) + ["cp1251", "latin-1"]
-    for enc in encs:
+    declared = f"cp{m.group(1).decode()}" if m else None
+    cyrillic_runs = len(re.findall(rb"[\xc0-\xff]{3,}", raw))
+    if declared in (None, "cp1252") and cyrillic_runs:
+        declared = "cp1251"
+    for enc in ([declared] if declared else []) + ["cp1251", "latin-1"]:
         try:
             return raw.decode(enc)
         except (UnicodeDecodeError, LookupError):
