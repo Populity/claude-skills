@@ -617,7 +617,8 @@ def validate(spec):
     ids = set()
     for i, f in enumerate(feats):
         check_feature(rep, f, i, ids, base)
-    types = {f.get("id"): f.get("type") for f in feats if isinstance(f, dict) and isinstance(f.get("id"), str)}
+    types = {f.get("id"): (f.get("type") if isinstance(f.get("type"), str) else None)
+             for f in feats if isinstance(f, dict) and isinstance(f.get("id"), str)}
     for i, f in enumerate(feats):
         if isinstance(f, dict) and f.get("type") == "thread" and isinstance(f.get("on"), str):
             where = f"features[{i}] ({f.get('id')})"
@@ -628,7 +629,7 @@ def validate(spec):
     # Fillets/chamfers before solid-adding features usually means a misread order.
     seen_finish = False
     for f in feats:
-        if not isinstance(f, dict):
+        if not isinstance(f, dict) or not isinstance(f.get("type"), str):
             continue
         if f.get("type") in {"fillet", "chamfer"}:
             seen_finish = True

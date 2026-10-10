@@ -56,6 +56,7 @@ import argparse
 import json
 import math
 import os
+import pprint
 import re
 import sys
 
@@ -1065,7 +1066,7 @@ def generate(spec, spec_name="spec.json"):
         "__MASS__": repr(spec.get("mass_kg")),
         "__MATERIAL__": repr(spec.get("material")),
         "__DENSITY__": repr(_density(spec)),
-        "__OPS__": json.dumps(ops, ensure_ascii=False, indent=1),
+        "__OPS__": pprint.pformat(ops, indent=1, width=110, sort_dicts=False),
     }
     code = TEMPLATE
     for k, v in rep.items():
