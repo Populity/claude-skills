@@ -564,9 +564,9 @@ def new_doc():
     return doc
 
 
-def text(msp, s, x, y, h=TXT, align="MIDDLE_CENTER", rot=0.0, layer="TEXT"):
+def text(msp, s, x, y, h=TXT, align="MIDDLE_CENTER", rot=0.0, layer="TEXT", width=1.0):
     from ezdxf.enums import TextEntityAlignment
-    t = msp.add_text(s, height=h, rotation=rot, dxfattribs={"style": FONT_STYLE, "layer": layer})
+    t = msp.add_text(s, height=h, rotation=rot, dxfattribs={"style": FONT_STYLE, "layer": layer, "width": width})
     t.set_placement((x, y), align=getattr(TextEntityAlignment, align))
     return t
 
@@ -580,14 +580,14 @@ def fit_text(msp, s, x0, y0, x1, y1, hs=(5.0, 3.5, 2.5)):
     w, hbox = x1 - x0 - 2, y1 - y0
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     for h in hs:
-        if tw(s, h) <= w and h <= hbox * 0.7:
+        if 1.2 * tw(s, h) <= w and h <= hbox * 0.7:
             return [text(msp, s, cx, cy, h)]
     words = s.split()
     if len(words) > 1:
         best = min(range(1, len(words)), key=lambda i: abs(len(" ".join(words[:i])) - len(" ".join(words[i:]))))
         a, b = " ".join(words[:best]), " ".join(words[best:])
         for h in hs:
-            if max(tw(a, h), tw(b, h)) <= w and 2.6 * h <= hbox:
+            if 1.2 * max(tw(a, h), tw(b, h)) <= w and 2.6 * h <= hbox:
                 return [text(msp, a, cx, cy + 0.8 * h, h), text(msp, b, cx, cy - 0.8 * h, h)]
     h = max(1.8, min(hs[-1], w / max(1, len(s) * CHAR_W)))
     return [text(msp, s, cx, cy, h)]
@@ -628,7 +628,7 @@ def frame_and_title(msp, sheet, fields):
     L(155, 15, 155, 20, thick=False)
 
     for x, lab in ((3.5, "Изм."), (12, "Лист"), (28.5, "№ докум."), (47.5, "Подп."), (60, "Дата")):
-        text(msp, lab, X0 + x, Y0 + 32.5, 2.5)
+        text(msp, lab, X0 + x, Y0 + 32.5, 2.5, width=0.8)
     for i, lab in enumerate(("Разраб.", "Пров.", "Т.контр.", "", "Н.контр.", "Утв.")):
         if lab:
             text(msp, lab, X0 + 1, Y0 + 27.5 - 5 * i, 2.5, align="MIDDLE_LEFT")

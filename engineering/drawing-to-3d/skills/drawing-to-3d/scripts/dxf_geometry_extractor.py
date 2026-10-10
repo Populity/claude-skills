@@ -202,7 +202,7 @@ def _mtext_plain(s):
         elif code == "S":                   # stacked fraction / tolerance: 1^2 1/2 1#2
             j = s.find(";", i + 2)
             j = n if j < 0 else j
-            out.append(re.sub(r"[\^#/]", "/", s[i + 2:j]).replace("/ ", "/").strip())
+            out.append(re.sub(r"[\^#/]", "/", s[i + 2:j]).replace("/ ", "/").strip().strip("/"))
             i = j + 1
         elif code in _MTEXT_ARG:
             j = s.find(";", i + 2)
