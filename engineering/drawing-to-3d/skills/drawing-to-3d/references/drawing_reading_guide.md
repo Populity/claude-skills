@@ -355,5 +355,5 @@ when:
 
 - `dxf_geometry_extractor.py` — §9
 - `part_spec_validator.py` — §11 (exit 3 on open questions)
-- `model_verifier.py` — §7 (V4 mass, `DENSITY`), §10 (V2 bbox, V3 hole counts)
+- `model_verifier.py` — §7 (V4 mass, `DENSITY`), §10 (V2 bbox, V3 holes at their spec positions — model vs spec, so it cannot catch a misread spec)
 - `stl_viewer.py` — §3 (view buttons follow the same X right, Y back, Z up frame)
