@@ -317,7 +317,7 @@ builds to one valid solid, and passes V1–V5.
      "profile": {"shape": "circle", "diameter": 20}, "height": 4},
     {"id": "H3", "type": "hole", "face": "<Y", "diameter": 10, "depth": "through",
      "positions": [[0, 40]]},
-    {"id": "F1", "type": "fillet", "radius": 6, "edges": "|Z and >Y"},
+    {"id": "F1", "type": "fillet", "radius": 6, "edges": {"near": [[-40, 25, 4], [40, 25, 4]]}},
     {"id": "F2", "type": "fillet", "radius": 4, "edges": {"near": [0, -17, 8]}}
   ],
   "expect": {"bbox_mm": [80, 54, 60], "tolerance_mm": 0.05},
@@ -351,7 +351,7 @@ How to read each line against the drawing:
 | `H1` + `csk` | "2 отв. Ø6,6, зенковка Ø13×90°" → explicit `positions`, not a pattern, because the drawing dimensions each from the centre line |
 | `B1` boss on `>Z` | The upright: an 80 × 8 rectangle at y = −21 (−25 + 4), raised 52 so the total is 60. The feature order matters: from now on `>Z` would mean the upright top |
 | `H2`, `B2`, `H3` on `<Y` | Front-view features: `(u, v)` = global (X, Z). Z = 40 is measured from the plate underside. `<Y` is the upright's front face, the most negative Y face. The B2 spigot is extruded 4 toward −Y, so the overall Y becomes 54 |
-| `F1` `"|Z and >Y"` | Vertical edges at max Y = the two plate corners on the +Y edge, away from the upright (R6; "2 скругл. R6" in the top view) |
+| `F1` `near` 2 points | The two vertical plate-corner edges on the +Y side, away from the upright (R6; "2 скругл. R6" in the top view). Picked by a point on each edge, not by the selector `"|Z and >Y"`, so the KOMPAS-3D backend (which selects edges by point) can build it too |
 | `F2` `near [0, -17, 8]` | The inner bend: the edge where the upright's inner face (y = −17) meets the plate top (z = 8). One point selects exactly that edge |
 | `expect.bbox_mm` | [80, 54, 60] from the overall dimensions (54 = 50 + the 4 mm spigot) |
 | `assumptions` | Each with `source`: the callout or note it was read from |

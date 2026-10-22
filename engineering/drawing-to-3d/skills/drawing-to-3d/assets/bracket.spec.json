@@ -35,7 +35,7 @@
      "profile": {"shape": "circle", "diameter": 20}, "height": 4},
     {"id": "H3", "type": "hole", "face": "<Y", "diameter": 10, "depth": "through",
      "positions": [[0, 40]]},
-    {"id": "F1", "type": "fillet", "radius": 6, "edges": "|Z and >Y"},
+    {"id": "F1", "type": "fillet", "radius": 6, "edges": {"near": [[-40, 25, 4], [40, 25, 4]]}},
     {"id": "F2", "type": "fillet", "radius": 4, "edges": {"near": [0, -17, 8]}}
   ],
   "expect": {"bbox_mm": [80, 54, 60], "tolerance_mm": 0.05},
