@@ -1,0 +1,33 @@
+{
+  "schema": "part-spec.v1",
+  "part": "bolt_m8x30",
+  "units": "mm",
+  "material": "Сталь 35 ГОСТ 1050-2013",
+  "mass_kg": null,
+  "drawing": {
+    "title": "Болт М8-6gx30.58 ГОСТ 7798-70 (упрощённая модель)",
+    "number": "ГОСТ 7798-70",
+    "views": {
+      "standard table": "d=8, S=13 (под ключ), k=5.5 (высота головки), l=30, b=22 (длина резьбы)"
+    }
+  },
+  "base": {
+    "type": "extrude",
+    "profile": {"shape": "regular_polygon", "sides": 6, "across_flats": 13},
+    "height": 5.5
+  },
+  "features": [
+    {"id": "B1", "type": "boss", "face": "<Z", "at": [0, 0],
+     "profile": {"shape": "circle", "diameter": 8}, "height": 30},
+    {"id": "T1", "type": "thread", "on": "B1", "designation": "M8-6g", "length": 22},
+    {"id": "C1", "type": "chamfer", "size": 0.8, "edges": {"near": [4, 0, -30]}}
+  ],
+  "expect": {"bbox_mm": [15.011, 13, 35.5], "tolerance_mm": 0.05},
+  "assumptions": [
+    {"id": "A1", "what": "Simplified standard-item model", "value": "hex prism S13 x k5.5 + plain Ø8 shank 30 long, tip chamfer 0.8; no head chamfer, no washer face, thread cosmetic",
+     "source": "ГОСТ 7798-70 table for М8; standard items are modelled as envelopes, the full designation lives in the specification"},
+    {"id": "A2", "what": "Origin", "value": "z=0 on the bearing face under the head, shank along -Z",
+     "source": "chosen so the -XY datum is the head's bearing face for mating"}
+  ],
+  "open_questions": []
+}

@@ -1,0 +1,15 @@
+{
+  "name": "drawing-to-3d",
+  "description": "Turn an engineering drawing (photo, scan, PDF or DXF; Russian ESKD/GOST or ISO/ASME) into a precise, verified 3D model the way a design engineer works in KOMPAS-3D. Eight deterministic stdlib scripts: a part-spec validator that refuses to proceed while any dimension is an open question; a CadQuery code generator whose script builds STEP + STL and measures what it built; a model verifier (valid solid, overall size, every hole at its drawn position, title-block mass, thread callouts); a native KOMPAS-3D backend that builds the part as an editable feature tree via the KOMPAS API; an ESKD drawing generator (first-angle views, frame, title block form 1, dimensions); an assembly generator with mates, clash check and a GOST 2.106 specification; an exact ASCII DXF geometry extractor; and a self-contained HTML viewer with drawing-standard views. Ships cs-cad-modeler agent and /cs:drawing-to-3d + /cs:cad-verify commands.",
+  "version": "2.11.2",
+  "author": {
+    "name": "Alireza Rezvani",
+    "url": "https://alirezarezvani.com"
+  },
+  "homepage": "https://github.com/alirezarezvani/claude-skills/tree/main/engineering/drawing-to-3d",
+  "repository": "https://github.com/alirezarezvani/claude-skills",
+  "license": "MIT",
+  "skills": [
+    "./skills/drawing-to-3d"
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "schema": "part-spec.v1",
+  "part": "flange_plate",
+  "units": "mm",
+  "material": "Сталь 45 ГОСТ 1050-2013",
+  "mass_kg": 1.02,
+  "drawing": {
+    "title": "Плита фланцевая (Flange plate)",
+    "number": "DEMO-001",
+    "scale": "1:1",
+    "projection": "first angle (ESKD / ISO E)",
+    "file": "flange_plate.dxf",
+    "views": {
+      "top (вид сверху)": "global X right, Y up; holes, slot, hidden pocket",
+      "front (главный вид)": "global X right, Z up; thickness 16, pocket depth 4"
+    }
+  },
+  "base": {
+    "type": "extrude",
+    "profile": {"shape": "rect", "width": 120, "length": 80, "corner_radius": 8},
+    "height": 16
+  },
+  "features": [
+    {"id": "H1", "type": "hole", "face": ">Z", "diameter": 9, "depth": "through",
+     "pattern": {"type": "grid", "nx": 2, "ny": 2, "pitch_x": 96, "pitch_y": 56}},
+    {"id": "H2", "type": "hole", "face": ">Z", "diameter": 22, "depth": "through",
+     "positions": [[0, 0]], "cbore": {"diameter": 34, "depth": 6}},
+    {"id": "H3", "type": "hole", "face": ">Z", "diameter": 6.8, "depth": 14,
+     "pattern": {"type": "polar", "count": 6, "pcd": 50, "start_angle_deg": 0}},
+    {"id": "T1", "type": "thread", "on": "H3", "designation": "M8x1.25-6H", "length": 12},
+    {"id": "P1", "type": "pocket", "face": "<Z", "at": [0, 0],
+     "profile": {"shape": "rect", "width": 90, "length": 20, "corner_radius": 4},
+     "depth": 4},
+    {"id": "S1", "type": "slot", "face": ">Z", "at": [0, -30], "length": 30, "width": 8,
+     "angle_deg": 0, "depth": 5},
+    {"id": "C1", "type": "chamfer", "size": 1,
+     "edges": {"near": [[0, 40, 16], [0, -40, 16], [60, 0, 16], [-60, 0, 16],
+                        [57.657, 37.657, 16], [-57.657, 37.657, 16],
+                        [57.657, -37.657, 16], [-57.657, -37.657, 16]]}}
+  ],
+  "expect": {"bbox_mm": [120, 80, 16], "tolerance_mm": 0.05},
+  "assumptions": [
+    {"id": "A1", "what": "Top outer edges chamfer (outline only, not hole or slot edges)", "value": "1x45°",
+     "source": "general note 'Неуказанные фаски 1x45°' applied to the outer contour; hole edges are left sharp because S1 and the H3 holes at 240°/300° are only 0.95 mm apart and two 1 mm chamfers would consume that wall"},
+    {"id": "A2", "what": "Origin", "value": "centre of the plate in plan, z=0 on the bottom face",
+     "source": "symmetric dimensioning from the centre lines in the top view"},
+    {"id": "A3", "what": "Tapped hole M8 modelled at drill diameter", "value": "Ø6.8 x 14 deep, thread 12 (cosmetic)",
+     "source": "callout '6 отв. M8-6H ↧12, ↧14 PCD 50' — standard CAD practice, thread recorded in T1"},
+    {"id": "A4", "what": "Title-block mass", "value": "1.02 kg",
+     "source": "основная надпись; checked against volume x 7.85 g/cm³"}
+  ],
+  "open_questions": []
+}

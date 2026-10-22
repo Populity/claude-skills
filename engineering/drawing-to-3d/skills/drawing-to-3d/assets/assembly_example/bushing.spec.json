@@ -1,0 +1,33 @@
+{
+  "schema": "part-spec.v1",
+  "part": "bushing",
+  "units": "mm",
+  "material": "Бр.О5Ц5С5 ГОСТ 613-79",
+  "mass_kg": null,
+  "drawing": {
+    "title": "Втулка (Bushing)",
+    "number": "DEMO-003",
+    "scale": "2:1",
+    "projection": "first angle (ESKD / ISO E)",
+    "views": {
+      "main view (главный вид), axis vertical": "axis = global Z, z=0 at the small end; Ø22 body 10 long, Ø33 collar 6 thick, bore Ø14 through"
+    }
+  },
+  "base": {
+    "type": "revolve",
+    "profile_rz": [[7, 0], [11, 0], [11, 10], [16.5, 10], [16.5, 16], [7, 16]]
+  },
+  "features": [
+    {"id": "C1", "type": "chamfer", "size": 0.5, "edges": {"near": [[0, 11, 0], [0, 16.5, 16]]}}
+  ],
+  "expect": {"bbox_mm": [33, 33, 16], "tolerance_mm": 0.05},
+  "assumptions": [
+    {"id": "A1", "what": "Axis and origin", "value": "axis = global Z, z=0 at the Ø22 end face",
+     "source": "lengths 10 and 16 dimensioned from the small end in the main view"},
+    {"id": "A2", "what": "Outer chamfers on the Ø22 end and the collar top", "value": "0.5x45°",
+     "source": "general note 'Неуказанные фаски 0,5x45°'"},
+    {"id": "A3", "what": "Fit in the housing", "value": "Ø22 k6 into Ø22 H7 (nominal, modelled line-on-line)",
+     "source": "assembly drawing callout Ø22 H7/k6 — the interference check treats line-on-line as contact, not clash"}
+  ],
+  "open_questions": []
+}
