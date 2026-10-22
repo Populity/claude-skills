@@ -126,8 +126,10 @@ could not run the build yourself, so you can run the verifier.
 
 - Freeform, cast-organic or sculpted surfaces: say that this plugin builds
   prismatic and turned parts, and stop.
-- Assemblies: one part per spec. Model each detail separately; assembling
-  them is done in the user's CAD.
+- Assemblies: one part per spec, then `assembly_codegen.py` joins them with
+  mates, checks clashes and writes the ГОСТ 2.106 specification. For a
+  KOMPAS-native tree use `kompas_codegen.py`; for the ЕСКД sheet use
+  `eskd_drawing_codegen.py`.
 - Writing CAD-agnostic geometry code for other kernels: out of scope. The
   output is CadQuery (OpenCascade), exported to STEP for every other CAD
   system.

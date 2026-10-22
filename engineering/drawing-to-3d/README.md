@@ -53,9 +53,9 @@ Then open the files:
 | `<part>.stl` | any slicer or mesh viewer (PrusaSlicer, Cura, Windows 3D Viewer) |
 | `<part>.html` | any browser. This is the viewer from `stl_viewer.py`, with standard views and an Ortho toggle |
 
-## The five scripts
+## The eight scripts
 
-All five live in `skills/drawing-to-3d/scripts/`. They are stdlib-only: no
+All eight live in `skills/drawing-to-3d/scripts/`. They are stdlib-only: no
 network, no LLM calls, and no dependencies. CadQuery is needed only by the
 *generated* script. Each one supports `--help`, `--sample` and
 `--output json`.
@@ -66,6 +66,9 @@ network, no LLM calls, and no dependencies. CadQuery is needed only by the
 | `cadquery_codegen.py` | Spec → one runnable `<part>_cad.py`. Each feature is a labelled step, and the script measures what it built (bbox, volume, hole diameters, validity) into `<part>.report.json`. | 0 written · 2 spec invalid · 3 open questions · 64 usage |
 | `model_verifier.py` | Checks the report against the drawing. V1 one valid solid · V2 overall size · V3 every hole Ø and its count · V4 title-block mass vs volume × density · V5 thread callouts | **0 PASS · 1 FAIL** · 64 usage |
 | `dxf_geometry_extractor.py` | Reads exact hole tables, radii, dimension values and title-block notes from an ASCII DXF, so nothing is read off pixels when a CAD file exists. | 0 extracted · 2 not ASCII DXF · 64 usage |
+| `kompas_codegen.py` | Spec → `<part>_kompas.py`, which builds the part **inside KOMPAS-3D** (v18–v23, API5 via pywin32) as an editable feature tree named by the drawing callouts, calibrates the sketch axes on first run, checks bbox and mass, and saves `.m3d` + STEP. Tested against a simulated API; check its `# VERIFY` points on first real run. | 0 written · 2 invalid · 3 open questions · 4 not expressible (selector-string fillets) · 64 usage |
+| `eskd_drawing_codegen.py` | Spec + `<part>_cad.py` → `<part>_drawing.py`, which projects the model (hidden-line removal) into first-angle views per ГОСТ 2.305 on a sheet with frame and title block form 1 (ГОСТ 2.104), standard scale, overall dimensions and hole callouts. DXF R2010 + PNG preview. | 0 written · 2 invalid · 3 open questions · 64 usage |
+| `assembly_codegen.py` | `assembly-spec.v1` → `<assembly>_asm.py`: parts placed by transforms or mates (coaxial, coincident, distance, fixed), assembly STEP, pairwise clash check, and the specification (спецификация) per ГОСТ 2.106 as CSV/MD. | 0 written · 2 invalid · 3 open questions · 4 unmappable mate · 64 usage |
 | `stl_viewer.py` | Packs the STL into one self-contained HTML viewer. It has Front, Top, Left, Right, Bottom, Back and Iso views, an Ortho toggle and feature edges, so you can lay views over the drawing. | 0 written · 2 unreadable STL · 64 usage |
 
 ## Pipeline
@@ -114,7 +117,10 @@ engineering/drawing-to-3d/
     │   ├── cadquery_codegen.py
     │   ├── model_verifier.py
     │   ├── dxf_geometry_extractor.py
-    │   └── stl_viewer.py
+    │   ├── stl_viewer.py
+    │   ├── kompas_codegen.py
+    │   ├── eskd_drawing_codegen.py
+    │   └── assembly_codegen.py
     ├── references/
     │   ├── drawing_reading_guide.md
     │   ├── part_spec_format.md
@@ -124,7 +130,8 @@ engineering/drawing-to-3d/
         ├── stepped_shaft.spec.json
         ├── bracket.spec.json
         ├── flange_plate.dxf
-        └── drawing_readout_worksheet.md
+        ├── drawing_readout_worksheet.md
+        └── assembly_example/   (flange + bushing + 4 bolts, assembly-spec.v1)
 ```
 
 Start with [`skills/drawing-to-3d/SKILL.md`](skills/drawing-to-3d/SKILL.md).
@@ -142,8 +149,13 @@ and the guidance for reading ЕСКД and ISO/ASME sheets is in
 - **Threads are cosmetic.** The model gets a tap-drill (or major-diameter)
   hole, and the callout (for example `M8x1.25-6H`) is carried into the report.
   Your CAD system or the shop applies the actual thread.
-- **Assemblies: one part per spec.** Model each detail (деталь) of an
-  assembly drawing separately, then assemble them in your CAD.
+- **Assemblies: one part per spec**, joined by `assembly_codegen.py`. Mates
+  cover coaxial, coincident, distance and fixed; no gears, cams or motion.
+- **ЕСКД drawing is a first draft.** Views, frame, title block, overall
+  dimensions and hole callouts are generated; sections (разрезы), tolerances,
+  roughness and detail dimensions are added by hand.
+- **KOMPAS-3D backend is untested on real KOMPAS.** It calibrates axes and
+  stops at the first failing feature instead of building something wrong.
 - **Tolerances, fits, roughness and heat treatment** are notes, not geometry.
   The model is built at nominal size.
 - **DWG and binary DXF** must be re-saved as ASCII DXF first.
@@ -156,7 +168,7 @@ and the guidance for reading ЕСКД and ISO/ASME sheets is in
 |---|---|
 | A 3D model from a written description, not a drawing | ask Claude directly; this plugin starts from a drawing |
 | Mesh repair, sculpting, organic shapes | Blender, or a mesh tool |
-| 2D drafting / producing the drawing itself | your CAD system (KOMPAS-3D, FreeCAD TechDraw) |
+| Finished, fully dimensioned 2D drawings with sections and tolerances | your CAD system (KOMPAS-3D, FreeCAD TechDraw); this plugin drafts the views and title block |
 | Tolerance stack-up or strength analysis | an engineering analysis tool; this plugin models nominal geometry |
 
 This plugin turns **an existing drawing of one part** into a verified solid

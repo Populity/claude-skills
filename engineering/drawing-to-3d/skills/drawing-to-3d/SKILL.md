@@ -11,7 +11,7 @@ metadata:
 
 # Drawing to 3D — a dimensioned drawing in, a verified STEP/STL out
 
-Five stdlib scripts in `scripts/` (every one has `--help` and `--sample`). The drawing is read once into a
+Eight stdlib scripts in `scripts/` (every one has `--help` and `--sample`). The drawing is read once into a
 **part spec** (`part-spec.v1` JSON); everything after that is deterministic code, so a wrong model traces to one spec line.
 
 ## Hard rules
@@ -82,6 +82,16 @@ python3 scripts/stl_viewer.py build/flange_plate.stl --report build/flange_plate
 | V3 `need n, found < n` | Hole missing, merged with another feature, or pattern count/PCD misread. |
 | V4 off by > 3 % | A feature missing or extra, or a misread dimension; unknown alloy → set top-level `density_g_cm3`. |
 | V1 `solids=2` | A boss does not touch the body, or a cut split the part — check its `at` and face. |
+
+## Like KOMPAS-3D: beyond one STEP file
+
+Run these only after the part passes `model_verifier.py`. Each emits a script for the user's PC.
+
+| Need | Command | Output |
+|---|---|---|
+| Editable model in KOMPAS-3D (дерево построения) | `kompas_codegen.py spec.json` → `<part>_kompas.py` (Windows, `pip install pywin32`; try `--dry-run` first) | `.m3d` + STEP; selector-string fillets exit 4 → rewrite as `near` points |
+| ЕСКД drawing (виды, рамка, основная надпись) | `eskd_drawing_codegen.py spec.json --cad-script <part>_cad.py` | DXF R2010 + PNG preview; sections, tolerances, roughness added by hand |
+| Assembly + спецификация ГОСТ 2.106 | `assembly_codegen.py assembly.asm.json` (`assembly-spec.v1`, see `assets/assembly_example/`) | assembly STEP, clash report, spec CSV/MD; exit 1 on a clash or unsatisfied mate |
 
 ## On the user's PC
 

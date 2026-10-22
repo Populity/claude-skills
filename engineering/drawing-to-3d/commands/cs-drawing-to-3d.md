@@ -20,8 +20,9 @@ Opening question, before any geometry:
   nanoCAD, FreeCAD and LibreCAD can all do this).
 - Freeform or organic surfaces (castings with sculpted surfaces, blades,
   ergonomic shells) → refuse. This plugin builds prismatic and turned parts.
-- Assembly drawing (сборочный чертёж) → one part per spec. Ask which detail
-  (деталь) to model first.
+- Assembly drawing (сборочный чертёж) → model each detail (деталь) as its own
+  spec first, then join them with `assembly_codegen.py` (see
+  `skills/drawing-to-3d/assets/assembly_example/`).
 
 ## 1. Exact geometry (DXF only)
 
